@@ -8,7 +8,7 @@ TestApp is a minimal Django application that provides basic HTTP endpoints inclu
 
 ## Application
 
-The 'testapp' directory contains the application which runs on Python 3.9. Project dependencies are defined in `pyproject.toml` using modern Python packaging standards and can be installed with `uv sync` or `pip install -e .`. Running `start.sh` will start the application server on port 8000.
+The 'testapp' directory contains the application which runs on Python 3.13. Project dependencies are defined in `pyproject.toml` using modern Python packaging standards and can be installed with `uv sync` or `pip install -e .`. Running `start.sh` will start the application server on port 8000.
 
 ## Tests
 
@@ -18,7 +18,7 @@ Running `test.sh` will execute the test suite. The environment variable REQUIRED
 
 ### System Requirements
 
-- **Python**: 3.9+
+- **Python**: 3.13+ (latest stable version recommended)
 - **Operating System**: Linux, macOS, or Windows
 - **Memory**: Minimum 512MB RAM
 - **Disk Space**: 100MB
@@ -27,10 +27,10 @@ Running `test.sh` will execute the test suite. The environment variable REQUIRED
 
 Dependencies are managed using modern Python packaging standards in `pyproject.toml`:
 
-- Django==3.2.16
-- asgiref==3.5.2
-- pytz==2022.5
-- sqlparse==0.4.3
+- Django>=5.2.0,<6.0.0
+- asgiref>=3.9.0,<4.0.0
+- pytz>=2025.2,<2026.0
+- sqlparse>=0.5.3,<1.0.0
 
 The project uses `uv.lock` for reproducible dependency resolution.
 
@@ -38,7 +38,7 @@ The project uses `uv.lock` for reproducible dependency resolution.
 
 ### Prerequisites
 
-1. **Python 3.9+** - Install from [python.org](https://python.org) or using your system's package manager
+1. **Python 3.13+** - Install from [python.org](https://python.org) or using your system's package manager
 2. **Package Manager** - Choose one of the following:
    - **uv** (recommended) - Modern, fast Python package manager
    - **pip** - Standard Python package installer (usually comes with Python)
@@ -109,7 +109,7 @@ Choose between **uv** (recommended) or **pip** installation methods:
    pip install -e .
    
    # Or install individual dependencies if needed
-   pip install django==3.2.16 asgiref==3.5.2 pytz==2022.5 sqlparse==0.4.3
+   pip install "django>=5.2.0,<6.0.0" "asgiref>=3.9.0,<4.0.0" "pytz>=2025.2,<2026.0" "sqlparse>=0.5.3,<1.0.0"
    ```
 
 #### Continue Setup (Both Methods)
@@ -248,7 +248,7 @@ python manage.py test
 - Hardcoded SECRET_KEY in settings
 - DEBUG mode enabled
 - Empty ALLOWED_HOSTS configuration
-- Outdated Django version
+- Previous security issues (now resolved with Django 5.2 upgrade)
 
 See [SECURITY.md](SECURITY.md) for detailed security assessment and recommendations.
 

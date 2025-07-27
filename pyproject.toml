@@ -10,10 +10,32 @@ authors = [
 maintainers = [
     {name = "Elio Severo Junior", email = "elioseverojunior@gmail.com"}
 ]
-requires-python = ">=3.9,<3.10"
-dependencies = [
-    "asgiref==3.5.2",
-    "django==3.2.16",
-    "pytz==2022.5",
-    "sqlparse==0.4.3",
+keywords = ["django", "web", "api", "enterprise"]
+classifiers = [
+    "Development Status :: 0.1.0 - Alpha",
+    "Environment :: Web Environment",
+    "Framework :: Django",
+    "Framework :: Django :: 5.2",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Internet :: WWW/HTTP",
+    "Topic :: Internet :: WWW/HTTP :: Dynamic Content",
 ]
+
+requires-python = ">=3.13,<3.14"
+dependencies = [
+    # Default Project Dependencies
+    "asgiref>=3.9.0,<4.0.0",
+    "django>=5.2.0,<6.0.0",
+    "pytz>=2025.2,<2026.0",
+    "sqlparse>=0.5.3,<1.0.0",
+]
+
+[tool.uv]
+link-mode = "copy"
+index-url = "https://pypi.org/simple"
+index-strategy = "first-index"
