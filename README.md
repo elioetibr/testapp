@@ -8,7 +8,7 @@ TestApp is a minimal Django application that provides basic HTTP endpoints inclu
 
 ## Application
 
-The 'testapp' directory contains the application which runs on Python 3.9. Project dependencies are stored in 'requirements.txt' and need to be installed with `pip install -r requirements.txt`. Running `start.sh` will start the application server on port 8000.
+The 'testapp' directory contains the application which runs on Python 3.9. Project dependencies are defined in `pyproject.toml` using modern Python packaging standards and can be installed with `uv sync` or `pip install -e .`. Running `start.sh` will start the application server on port 8000.
 
 ## Tests
 
@@ -25,22 +25,68 @@ Running `test.sh` will execute the test suite. The environment variable REQUIRED
 
 ### Python Dependencies
 
-See `requirements.txt` for complete dependency list:
+Dependencies are managed using modern Python packaging standards in `pyproject.toml`:
 
 - Django==3.2.16
 - asgiref==3.5.2
 - pytz==2022.5
 - sqlparse==0.4.3
 
+The project uses `uv.lock` for reproducible dependency resolution.
+
 ## Installation & Setup
 
 ### Prerequisites
 
 1. **Python 3.9+** - Install from [python.org](https://python.org) or using your system's package manager
-2. **pip** - Python package installer (usually comes with Python)
+2. **Package Manager** - Choose one of the following:
+   - **uv** (recommended) - Modern, fast Python package manager
+   - **pip** - Standard Python package installer (usually comes with Python)
 3. **Virtual Environment** (recommended) - For dependency isolation
 
+#### Installing uv (Recommended)
+
+uv is a fast Python package installer and resolver, written in Rust. It's significantly faster than pip and provides better dependency resolution.
+
+**Install uv:**
+
+```bash
+# On macOS and Linux
+curl -LsSf https://astral.sh/uv/install.sh | sh
+
+# On Windows
+powershell -c "irm https://astral.sh/uv/install.ps1 | iex"
+
+# Or using pip
+pip install uv
+```
+
 ### Quick Start
+
+Choose between **uv** (recommended) or **pip** installation methods:
+
+#### Option A: Using uv (Recommended)
+
+1. **Clone the repository**
+
+   ```bash
+   git clone <repository-url>
+   cd testapp
+   ```
+
+2. **Install dependencies**
+
+   ```bash
+   # uv automatically creates virtual environment and installs from pyproject.toml
+   uv sync
+   
+   # Or if you prefer manual virtual environment creation
+   uv venv
+   source .venv/bin/activate  # On Windows: .venv\Scripts\activate
+   uv pip install -e .
+   ```
+
+#### Option B: Using pip (Traditional)
 
 1. **Clone the repository**
 
@@ -59,8 +105,14 @@ See `requirements.txt` for complete dependency list:
 3. **Install dependencies**
 
    ```bash
-   pip install -r requirements.txt
+   # Install project in editable mode
+   pip install -e .
+   
+   # Or install individual dependencies if needed
+   pip install django==3.2.16 asgiref==3.5.2 pytz==2022.5 sqlparse==0.4.3
    ```
+
+#### Continue Setup (Both Methods)
 
 4. **Set required environment variable**
 
@@ -79,6 +131,10 @@ See `requirements.txt` for complete dependency list:
    Or manually:
 
    ```bash
+   # With uv
+   uv run python manage.py runserver 0.0.0.0:8000
+   
+   # With pip (ensure virtual environment is activated)
    python manage.py runserver 0.0.0.0:8000
    ```
 
@@ -93,7 +149,8 @@ testapp/
 ├── ASSESSMENT.md            # Security assessment narrative
 ├── README.md                # Main project documentation
 ├── SECURITY.md              # Security policy and vulnerabilities
-├── requirements.txt         # Python dependencies (moved from TestApp/)
+├── pyproject.toml           # Modern Python project configuration and dependencies
+├── uv.lock                  # Locked dependency versions for reproducible builds
 ├── DevOps Assessment CDK.txt # Original assessment document
 └── src/                     # Application source code
     ├── manage.py            # Django management script
@@ -130,16 +187,16 @@ Executes the Django test suite. **Note**: Requires `REQUIRED_SETTING` environmen
 ### Manual Commands
 
 ```bash
-# Run development server
+# With uv (runs in virtual environment automatically)
+uv run python manage.py runserver
+uv run python manage.py test
+uv run python manage.py makemigrations
+uv run python manage.py migrate
+
+# With pip (ensure virtual environment is activated first)
 python manage.py runserver
-
-# Run tests
 python manage.py test
-
-# Create migrations (if models are added)
 python manage.py makemigrations
-
-# Apply migrations (if database is configured)
 python manage.py migrate
 ```
 
@@ -174,10 +231,13 @@ The application runs in debug mode by default. For production deployment, ensure
 # Set required environment variable
 export REQUIRED_SETTING=test_value
 
-# Run tests
+# Run tests using scripts
 ./test.sh
 
-# Or manually
+# Or manually with uv
+uv run python manage.py test
+
+# Or manually with pip (ensure virtual environment is activated)
 python manage.py test
 ```
 
@@ -197,7 +257,8 @@ See [SECURITY.md](SECURITY.md) for detailed security assessment and recommendati
 ### Common Issues
 
 1. **ModuleNotFoundError: No module named 'django'**
-   - Solution: Install dependencies with `pip install -r requirements.txt`
+   - Solution with uv: `uv sync` (installs from pyproject.toml)
+   - Solution with pip: `pip install -e .` (installs project in editable mode)
 
 2. **Test failures with REQUIRED_SETTING**
    - Solution: Set environment variable `export REQUIRED_SETTING=test_value`
@@ -206,7 +267,11 @@ See [SECURITY.md](SECURITY.md) for detailed security assessment and recommendati
    - Solution: Make scripts executable with `chmod +x start.sh test.sh`
 
 4. **Port 8000 already in use**
-   - Solution: Kill existing process or use different port with `python manage.py runserver 0.0.0.0:8001`
+   - Solution with uv: Kill existing process or use different port with `uv run python manage.py runserver 0.0.0.0:8001`
+   - Solution with pip: Kill existing process or use different port with `python manage.py runserver 0.0.0.0:8001`
+
+5. **uv command not found**
+   - Solution: Install uv using the installation instructions above, or use pip instead
 
 ### Getting Help
 

@@ -1,0 +1,19 @@
+[project]
+name = "testapp"
+version = "0.1.0"
+description = "Django TestApp for DevOps Assessment"
+readme = "README.md"
+license = {text = "MIT"}
+authors = [
+    {name = "Elio Severo Junior", email = "elioseverojunior@gmail.com"}
+]
+maintainers = [
+    {name = "Elio Severo Junior", email = "elioseverojunior@gmail.com"}
+]
+requires-python = ">=3.9,<3.10"
+dependencies = [
+    "asgiref==3.5.2",
+    "django==3.2.16",
+    "pytz==2022.5",
+    "sqlparse==0.4.3",
+]
