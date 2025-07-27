@@ -6,6 +6,14 @@ A simple Django web application for DevOps assessment purposes.
 
 TestApp is a minimal Django application that provides basic HTTP endpoints including a hello world endpoint and health check. This project is designed for DevOps assessment and demonstrates basic Django application structure.
 
+## Application
+
+The 'testapp' directory contains the application which runs on Python 3.9. Project dependencies are stored in 'requirements.txt' and need to be installed with `pip install -r requirements.txt`. Running `start.sh` will start the application server on port 8000.
+
+## Tests
+
+Running `test.sh` will execute the test suite. The environment variable REQUIRED_SETTING must be set to some value for the tests to pass.
+
 ## Requirements
 
 ### System Requirements
@@ -17,7 +25,7 @@ TestApp is a minimal Django application that provides basic HTTP endpoints inclu
 
 ### Python Dependencies
 
-See `TestApp/requirements.txt` for complete dependency list:
+See `requirements.txt` for complete dependency list:
 
 - Django==3.2.16
 - asgiref==3.5.2
@@ -51,7 +59,6 @@ See `TestApp/requirements.txt` for complete dependency list:
 3. **Install dependencies**
 
    ```bash
-   cd TestApp
    pip install -r requirements.txt
    ```
 
@@ -64,7 +71,7 @@ See `TestApp/requirements.txt` for complete dependency list:
 5. **Start the application**
 
    ```bash
-   cd testapp
+   cd src
    chmod +x start.sh
    ./start.sh
    ```
@@ -82,10 +89,13 @@ See `TestApp/requirements.txt` for complete dependency list:
 ## Project Structure
 
 ```text
-TestApp/
-├── requirements.txt          # Python dependencies
-├── README.md                # Project documentation
-└── testapp/                 # Main Django project
+testapp/
+├── ASSESSMENT.md            # Security assessment narrative
+├── README.md                # Main project documentation
+├── SECURITY.md              # Security policy and vulnerabilities
+├── requirements.txt         # Python dependencies (moved from TestApp/)
+├── DevOps Assessment CDK.txt # Original assessment document
+└── src/                     # Application source code
     ├── manage.py            # Django management script
     ├── start.sh             # Application startup script
     ├── test.sh              # Test execution script
@@ -208,4 +218,3 @@ See [SECURITY.md](SECURITY.md) for detailed security assessment and recommendati
 ## License
 
 This project is for assessment purposes only.
-
