@@ -149,9 +149,17 @@ testapp/
 ├── ASSESSMENT.md            # Security assessment narrative
 ├── README.md                # Main project documentation
 ├── SECURITY.md              # Security policy and vulnerabilities
+├── SOPS_WRAPPER_README.md   # SOPS wrapper documentation
+├── Makefile                 # Build automation and workflow management
 ├── pyproject.toml           # Modern Python project configuration and dependencies
 ├── uv.lock                  # Locked dependency versions for reproducible builds
 ├── DevOps Assessment CDK.txt # Original assessment document
+├── scripts/                 # Utility scripts and tools
+│   └── python/
+│       └── sops/            # SOPS encryption/decryption wrapper
+│           ├── sops_wrapper.py         # Main SOPS Python wrapper
+│           ├── setup_sops_wrapper.py   # Setup and configuration script
+│           └── test_sops_wrapper.py    # Comprehensive test suite
 └── src/                     # Application source code
     ├── manage.py            # Django management script
     ├── start.sh             # Application startup script
@@ -251,6 +259,49 @@ python manage.py test
 - Previous security issues (now resolved with Django 5.2 upgrade)
 
 See [SECURITY.md](SECURITY.md) for detailed security assessment and recommendations.
+
+## SOPS Wrapper
+
+The project includes a comprehensive Python wrapper for SOPS (Secrets OPerationS) that provides intelligent encryption and decryption of secrets with change detection and validation.
+
+### Quick Start
+
+```bash
+# Setup SOPS wrapper (one-time)
+make sops-setup
+
+# Encrypt secrets
+make sops-encrypt
+
+# Decrypt secrets  
+make sops-decrypt
+
+# Convert secrets to GitHub Actions format
+make sops-to-act
+
+# Run tests
+make sops-test
+```
+
+### Advanced Usage
+
+```bash
+# Encrypt with custom pattern
+make sops-encrypt-pattern PATTERN="secrets/*.dec.yaml"
+
+# Decrypt with custom pattern
+make sops-decrypt-pattern PATTERN="config/*.enc.yaml"
+```
+
+### Features
+
+- **Smart Change Detection**: Only encrypts files when content has actually changed
+- **Empty File Prevention**: Ensures no empty encrypted files are generated
+- **Parallel Processing**: Processes multiple files concurrently for better performance
+- **GitHub Actions Integration**: Convert encrypted secrets to `.act/.secrets` format
+- **Comprehensive Testing**: Full test suite with mocks and integration tests
+
+See [SOPS_WRAPPER_README.md](SOPS_WRAPPER_README.md) for detailed documentation.
 
 ## Troubleshooting
 

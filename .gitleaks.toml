@@ -1,0 +1,135 @@
+# Gitleaks configuration for TestApp project
+title = "TestApp Security Configuration"
+
+[extend]
+# Inherit from the default gitleaks config
+useDefault = true
+
+[[rules]]
+description = "Django Secret Key"
+id = "django-secret-key"
+regex = '''django-insecure-[a-z0-9+/=_-]{50,}'''
+keywords = ["django-insecure"]
+
+[[rules]]
+description = "AWS Access Key ID"
+id = "aws-access-key-id"
+regex = '''AKIA[0-9A-Z]{16}'''
+keywords = ["AKIA"]
+
+[[rules]]
+description = "AWS Secret Access Key"
+id = "aws-secret-access-key"
+regex = '''[A-Za-z0-9/+=]{40}'''
+keywords = ["aws_secret_access_key", "aws-secret-access-key"]
+
+[[rules]]
+description = "Generic API Key"
+id = "generic-api-key"
+regex = '''[Aa][Pp][Ii]_?[Kk][Ee][Yy].*['\"][0-9a-zA-Z]{32,45}['\"]'''
+keywords = ["api_key", "api-key", "apikey"]
+
+[[rules]]
+description = "GitHub Token"
+id = "github-token"
+regex = '''ghp_[0-9a-zA-Z]{36}'''
+keywords = ["ghp_"]
+
+[[rules]]
+description = "Docker Hub Token"
+id = "docker-hub-token"
+regex = '''dckr_pat_[0-9a-zA-Z-_]{32,}'''
+keywords = ["dckr_pat_"]
+
+[[rules]]
+description = "Slack Token"
+id = "slack-token"
+regex = '''xox[baprs]-([0-9a-zA-Z]{10,48})?'''
+keywords = ["xoxb", "xoxa", "xoxp", "xoxr", "xoxs"]
+
+[[rules]]
+description = "Private SSH Key"
+id = "private-ssh-key"
+regex = '''-----BEGIN (?:RSA |OPENSSH |DSA |EC |PGP )?PRIVATE KEY-----'''
+keywords = ["BEGIN PRIVATE KEY", "BEGIN RSA PRIVATE KEY", "BEGIN OPENSSH PRIVATE KEY"]
+
+[[rules]]
+description = "Private Key Files"
+id = "private-key-files"
+regex = '''.*\.(pem|key|p12|pfx|jks)$'''
+path = '''.*\.(pem|key|p12|pfx|jks)$'''
+
+[[rules]]
+description = "Database URL"
+id = "database-url"
+regex = '''(?i)(postgres|mysql|mongodb)://[a-zA-Z0-9._-]+:[a-zA-Z0-9._-]+@[a-zA-Z0-9._-]+:[0-9]+/[a-zA-Z0-9._-]+'''
+keywords = ["postgres://", "mysql://", "mongodb://"]
+
+[[rules]]
+description = "JWT Token"
+id = "jwt-token"
+regex = '''eyJ[a-zA-Z0-9_-]*\.[a-zA-Z0-9_-]*\.[a-zA-Z0-9_-]*'''
+keywords = ["eyJ"]
+
+# Allowlist for specific files/patterns that are safe
+[allowlist]
+description = "Global allowlist"
+files = [
+    '''\.md$''',          # Markdown files
+    '''\.txt$''',         # Text files
+    '''\.json$''',        # JSON files (except package files)
+    '''\.toml$''',        # TOML files
+    '''\.yml$''',         # YAML files
+    '''\.yaml$''',        # YAML files
+    '''\.gitignore$''',   # Git ignore files
+    '''\.dockerignore$''', # Docker ignore files
+    '''LICENSE$''',       # License files
+    '''CHANGELOG.*''',    # Changelog files
+]
+
+# Allowlist for specific patterns
+regexes = [
+    '''example\.com''',   # Example domains
+    '''localhost''',      # Localhost references
+    '''127\.0\.0\.1''',   # Localhost IP
+    '''0\.0\.0\.0''',     # Default IP
+    '''test.*key''',      # Test keys in comments
+    '''fake.*key''',      # Fake keys in examples
+    '''dummy.*key''',     # Dummy keys in examples
+    '''sample.*key''',    # Sample keys in examples
+]
+
+# Allowlist for specific paths
+paths = [
+    '''\.git/''',                           # Git directory
+    '''node_modules/''',                    # Node modules
+    '''\.venv/''',                         # Python virtual environment
+    '''__pycache__/''',                    # Python cache
+    '''\.pytest_cache/''',                 # Pytest cache
+    '''\.mypy_cache/''',                   # MyPy cache
+    '''infrastructure/cdk\.out/''',        # CDK output
+    '''infrastructure/node_modules/''',     # CDK node modules
+    '''testapp/static/''',                 # Django static files
+    '''testapp/media/''',                  # Django media files
+]
+
+# Specific commit allowlist (for historical commits that might contain test data)
+commits = [
+    # Add specific commit hashes here if needed
+]
+
+# Entropy settings for detecting high-entropy strings (potential secrets)
+[allowlist.entropy]
+# Skip entropy checks for specific file types
+stopwords = [
+    "static",
+    "public",
+    "assets",
+    "test",
+    "spec",
+    "example",
+    "sample",
+    "dummy",
+    "fake",
+    "mock",
+]
