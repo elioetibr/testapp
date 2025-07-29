@@ -1,8 +1,5 @@
 from django.urls import path
-from .views import hello_world, health_check
 
+from .views import health_check, hello_world
 
-urlpatterns = [
-    path('', hello_world),
-    path('health/', health_check)
-]
+urlpatterns = [path("", hello_world), path("health/", health_check)]
