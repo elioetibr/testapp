@@ -55,7 +55,7 @@ environ.Env.read_env(ROOT_DIR / ".env")
 SECRET_KEY = env("SECRET_KEY")
 if not SECRET_KEY:
     if env("DEBUG"):
-        SECRET_KEY = "django-insecure-fallback-key-for-development-only"
+        SECRET_KEY = "django-insecure-fallback-key-for-development-only"  # nosec B105
     else:
         raise ValueError("SECRET_KEY environment variable is required in production")
 

@@ -97,6 +97,8 @@ regexes = [
     '''fake.*key''',      # Fake keys in examples
     '''dummy.*key''',     # Dummy keys in examples
     '''sample.*key''',    # Sample keys in examples
+    '''https://github\.com/.*/releases/.*/download/.*''', # GitHub release download URLs
+    '''curl.*https://github\.com/.*/releases/.*''',       # curl commands with GitHub URLs
 ]
 
 # Allowlist for specific paths
@@ -115,7 +117,8 @@ paths = [
 
 # Specific commit allowlist (for historical commits that might contain test data)
 commits = [
-    # Add specific commit hashes here if needed
+    "d6aef91602734ecd6b709ba37bb1d8cfed602d57", # GitHub download URLs false positive
+    "ee96768d68d695be4c98746924ea3f3bb5e0fcd1", # GitHub download URLs false positive
 ]
 
 # Entropy settings for detecting high-entropy strings (potential secrets)
