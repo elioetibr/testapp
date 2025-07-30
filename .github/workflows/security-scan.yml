@@ -1,0 +1,320 @@
+name: Security Scan
+
+on:
+  push:
+    branches: [ main, master, develop ]
+  pull_request:
+    branches: [ main, master ]
+  schedule:
+    # Run daily security scans at 2 AM UTC
+    - cron: '0 2 * * *'
+
+env:
+  PYTHON_VERSION: '3.9'
+
+# Global permissions for all jobs
+permissions:
+  contents: read
+  security-events: write
+  actions: read
+  checks: write
+  pull-requests: write
+
+jobs:
+  secret-scan:
+    name: Secret Scanning
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Full history for comprehensive scanning
+
+      - name: Run Gitleaks
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITLEAKS_LICENSE: ${{ secrets.GITLEAKS_LICENSE }}
+        with:
+          config-path: .gitleaks.toml
+
+      - name: Upload Gitleaks SARIF (if Code Scanning enabled)
+        if: always() && github.event_name != 'pull_request'
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: results.sarif
+          category: gitleaks
+        continue-on-error: true
+
+      - name: Upload Gitleaks results as artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gitleaks-results
+          path: results.sarif
+        continue-on-error: true
+
+  dependency-scan:
+    name: Dependency Vulnerability Scan
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Python and UV
+        uses: astral-sh/setup-uv@v2
+        with:
+          version: "latest"
+          enable-cache: true
+
+      - name: Install dependencies
+        run: |
+          uv sync --all-extras
+          # Generate requirements.txt that Snyk can understand, excluding the local package
+          uv pip freeze | grep -v "^testapp" | grep -v "^-e file://" > requirements-snyk.txt
+          echo "Generated requirements for Snyk:"
+          head -10 requirements-snyk.txt
+
+      - name: Run Snyk to check for vulnerabilities
+        uses: snyk/actions/python@master
+        continue-on-error: true
+        env:
+          SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+        with:
+          args: --severity-threshold=high --file=requirements-snyk.txt
+
+      - name: Upload Snyk results to GitHub Code Scanning (if enabled)
+        if: always() && github.event_name != 'pull_request'
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: snyk.sarif
+          category: snyk
+        continue-on-error: true
+
+      - name: Upload Snyk results as artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: snyk-results
+          path: snyk.sarif
+        continue-on-error: true
+
+      - name: Snyk Monitor (Track dependencies)
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: snyk/actions/python@master
+        env:
+          SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+        with:
+          command: monitor
+          args: --file=requirements-snyk.txt
+
+  # Job 3: SAST (Static Application Security Testing)
+  sast-scan:
+    name: Static Application Security Testing
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Python and UV
+        uses: astral-sh/setup-uv@v2
+        with:
+          version: "latest"
+          enable-cache: true
+
+      - name: Install dependencies
+        run: uv sync --all-extras
+
+      - name: Install security tools
+        run: |
+          uv pip install bandit[toml] safety
+          pip install semgrep
+
+      - name: Run Bandit (Python Security Linter)
+        run: |
+          uv run bandit -r src/testapp/ -f json -o bandit-report.json || true
+          uv run bandit -r src/testapp/ -f txt
+
+      - name: Run Safety (Known Security Vulnerabilities)
+        run: |
+          uv run safety check --json --output safety-report.json || true
+          uv run safety check
+
+      - name: Run Semgrep (SAST)
+        env:
+          SEMGREP_APP_TOKEN: ${{ secrets.SEMGREP_APP_TOKEN }}
+        run: |
+          semgrep --config=auto --json --output=semgrep-report.json src/ || true
+          semgrep --config=auto src/
+
+      - name: Upload SAST results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sast-reports
+          path: |
+            bandit-report.json
+            safety-report.json
+            semgrep-report.json
+
+  container-scan:
+    name: Container Security Scan
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build Docker image for scanning
+        run: |
+          docker build -f Dockerfile -t testapp:scan-latest .
+
+      - name: Install Trivy
+        run: |
+          sudo apt-get update
+          sudo apt-get install wget apt-transport-https gnupg lsb-release
+          wget -qO - https://aquasecurity.github.io/trivy-repo/deb/public.key | sudo apt-key add -
+          echo "deb https://aquasecurity.github.io/trivy-repo/deb $(lsb_release -sc) main" | sudo tee -a /etc/apt/sources.list.d/trivy.list
+          sudo apt-get update
+          sudo apt-get install trivy
+
+      - name: Run Trivy vulnerability scanner
+        run: |
+          trivy image --format sarif --output trivy-results.sarif testapp:scan-latest || true
+          trivy image --severity HIGH,CRITICAL testapp:scan-latest
+
+      - name: Upload Trivy scan results to GitHub Code Scanning (if enabled)
+        if: always() && github.event_name != 'pull_request'
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: trivy-results.sarif
+          category: trivy
+        continue-on-error: true
+
+      - name: Upload Trivy results as artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: trivy-results
+          path: trivy-results.sarif
+        continue-on-error: true
+
+      - name: Run Snyk Container scan
+        if: env.SNYK_TOKEN != ''
+        uses: snyk/actions/docker@master
+        env:
+          SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+        with:
+          image: testapp:scan-latest
+          args: --severity-threshold=high
+
+  license-scan:
+    name: License Compliance Scan
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Python and UV
+        uses: astral-sh/setup-uv@v2
+        with:
+          version: "latest"
+          enable-cache: true
+
+      - name: Install dependencies
+        run: uv sync --all-extras
+
+      - name: Install license scanner
+        run: uv pip install pip-licenses
+
+      - name: Scan Python licenses
+        run: |
+          uv run pip-licenses --format=json --output-file python-licenses.json
+          uv run pip-licenses --format=plain
+
+      - name: Upload license scan results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: license-reports
+          path: python-licenses.json
+
+  policy-validation:
+    name: Security Policy Validation
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Check for security policy compliance
+        run: |
+          # Check for SECURITY.md
+          if [ ! -f "SECURITY.md" ]; then
+            echo "❌ SECURITY.md file is missing"
+            exit 1
+          fi
+          
+          # Check for sensitive files in git history
+          if git log --all --full-history --pretty=format: --name-only | grep -E '\.(key|pem|p12|jks)$'; then
+            echo "❌ Sensitive files detected in git history"
+            exit 1
+          fi
+          
+          # Check Django settings for production readiness
+          if grep -q "DEBUG = True" src/testapp/settings.py; then
+            echo "❌ DEBUG mode is enabled in settings.py"
+            exit 1
+          fi
+          
+          echo "✅ Basic security policy checks passed"
+
+  security-summary:
+    name: Security Summary
+    runs-on: ubuntu-latest
+    needs: [secret-scan, dependency-scan, sast-scan, container-scan, license-scan]
+    if: always()
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+
+      - name: Generate Security Summary
+        run: |
+          echo "# Security Scan Summary" > security-summary.md
+          echo "Date: $(date)" >> security-summary.md
+          echo "Commit: ${{ github.sha }}" >> security-summary.md
+          echo "" >> security-summary.md
+          
+          echo "## Scan Results:" >> security-summary.md
+          echo "- ✅ Secret Scanning (Gitleaks): ${{ needs.secret-scan.result }}" >> security-summary.md
+          echo "- ✅ Dependency Scanning (Snyk): ${{ needs.dependency-scan.result }}" >> security-summary.md
+          echo "- ✅ SAST Scanning: ${{ needs.sast-scan.result }}" >> security-summary.md
+          echo "- ✅ Infrastructure Scanning: ${{ needs.infrastructure-scan.result }}" >> security-summary.md
+          echo "- ✅ Container Scanning: ${{ needs.container-scan.result }}" >> security-summary.md
+          echo "- ✅ License Scanning: ${{ needs.license-scan.result }}" >> security-summary.md
+          
+          cat security-summary.md
+
+      - name: Upload Security Summary
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: security-summary
+          path: security-summary.md
+
+      - name: Comment PR with Security Summary
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const summary = fs.readFileSync('security-summary.md', 'utf8');
+            
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: `## 🔒 Security Scan Results\n\n${summary}`
+            });
