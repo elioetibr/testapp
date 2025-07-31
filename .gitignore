@@ -2009,6 +2009,10 @@ infrastructure/cdk.context.json
 .env.local
 .env.*.local
 
+# Auto-generated CI/CD reports (but keep requirements-snyk.txt for Snyk scanning)
+bandit-report.json     # Bandit security report
+results.sarif          # Gitleaks SARIF report
+
 ### End of Personal Ignores ###
 
 ### Personal Always Add ###

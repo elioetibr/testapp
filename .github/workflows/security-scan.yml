@@ -10,7 +10,7 @@ on:
     - cron: '0 2 * * *'
 
 env:
-  PYTHON_VERSION: '3.9'
+  PYTHON_VERSION: '3.13'
 
 # Global permissions for all jobs
 permissions:
@@ -68,12 +68,10 @@ jobs:
           enable-cache: true
 
       - name: Install dependencies
-        run: |
-          uv sync --all-extras
-          # Generate requirements.txt that Snyk can understand, excluding the local package
-          uv pip freeze | grep -v "^testapp" | grep -v "^-e file://" > requirements-snyk.txt
-          echo "Generated requirements for Snyk:"
-          head -10 requirements-snyk.txt
+        run: uv sync --all-extras
+
+      - name: Generate requirements-snyk.txt for Snyk
+        run: make requirements-snyk
 
       - name: Run Snyk to check for vulnerabilities
         uses: snyk/actions/python@master
