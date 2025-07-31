@@ -23,7 +23,7 @@ permissions:
 jobs:
   secret-scan:
     name: Secret Scanning
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.RUNS_ON }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -56,7 +56,7 @@ jobs:
 
   dependency-scan:
     name: Dependency Vulnerability Scan
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.RUNS_ON }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -65,7 +65,7 @@ jobs:
         uses: astral-sh/setup-uv@v2
         with:
           version: "latest"
-          enable-cache: true
+          enable-cache: false
 
       - name: Install dependencies
         run: uv sync --all-extras
@@ -79,7 +79,7 @@ jobs:
         env:
           SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
         with:
-          args: --severity-threshold=high --package-manager=pip --file=requirements-snyk.txt --project-name=testapp
+          args: --severity-threshold=high --package-manager=pip --file=requirements-snyk.txt --project-name=testapp --sarif-file-output=snyk.sarif
 
       - name: Upload Snyk results to GitHub Code Scanning (if enabled)
         if: always() && github.event_name != 'pull_request'
@@ -104,12 +104,12 @@ jobs:
           SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
         with:
           command: monitor
-          args: --package-manager=pip --file=requirements-snyk.txt --project-name=testapp
+          args: --package-manager=pip --file=requirements-snyk.txt --project-name=testapp --skip-unresolved
 
   # Job 3: SAST (Static Application Security Testing)
   sast-scan:
     name: Static Application Security Testing
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.RUNS_ON }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -118,7 +118,7 @@ jobs:
         uses: astral-sh/setup-uv@v2
         with:
           version: "latest"
-          enable-cache: true
+          enable-cache: false
 
       - name: Install dependencies
         run: uv sync --all-extras
@@ -157,7 +157,7 @@ jobs:
 
   container-scan:
     name: Container Security Scan
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.RUNS_ON }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -210,7 +210,7 @@ jobs:
 
   license-scan:
     name: License Compliance Scan
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.RUNS_ON }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -219,7 +219,7 @@ jobs:
         uses: astral-sh/setup-uv@v2
         with:
           version: "latest"
-          enable-cache: true
+          enable-cache: false
 
       - name: Install dependencies
         run: uv sync --all-extras
@@ -241,7 +241,7 @@ jobs:
 
   policy-validation:
     name: Security Policy Validation
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.RUNS_ON }}
     if: github.event_name == 'pull_request'
     steps:
       - name: Checkout code
@@ -271,7 +271,7 @@ jobs:
 
   security-summary:
     name: Security Summary
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.RUNS_ON }}
     needs: [secret-scan, dependency-scan, sast-scan, container-scan, license-scan]
     if: always()
     steps:
