@@ -1,0 +1,604 @@
+name: CI Development Workflow
+
+on:
+  push:
+    branches: [ main, master, develop ]
+  pull_request:
+    branches: [ main, master ]
+  schedule:
+    # Run daily security scans at 2 AM UTC
+    - cron: '0 2 * * *'
+
+env:
+  PYTHON_VERSION: '3.13'
+  ECR_REPOSITORY: testapp
+
+# Global permissions for all jobs
+permissions:
+  contents: read
+  security-events: write
+  actions: read
+  checks: write
+  pull-requests: write
+
+jobs:
+  secret-scan:
+    name: Secret Scanning
+    runs-on: ${{ vars.RUNS_ON }}
+    if: ${{ !contains(github.event.head_commit.message, '[skip ci]') && !contains(github.event.head_commit.message, '[ci skip]') }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Full history for comprehensive scanning
+
+      - name: Run Gitleaks
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITLEAKS_LICENSE: ${{ secrets.GITLEAKS_LICENSE }}
+          GITLEAKS_CONFIG: .gitleaks.toml
+          GITLEAKS_VERSION: latest
+
+      - name: Upload Gitleaks SARIF (if Code Scanning enabled)
+        if: always() && github.event_name != 'pull_request'
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: results.sarif
+          category: gitleaks
+        continue-on-error: true
+
+      - name: Upload Gitleaks results as artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gitleaks-results
+          path: results.sarif
+        continue-on-error: true
+
+  dependency-scan:
+    name: Dependency Vulnerability Scan
+    runs-on: ${{ vars.RUNS_ON }}
+    if: ${{ !contains(github.event.head_commit.message, '[skip ci]') && !contains(github.event.head_commit.message, '[ci skip]') }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Python and UV
+        uses: astral-sh/setup-uv@v2
+        with:
+          version: "latest"
+          enable-cache: false
+
+      - name: Install dependencies
+        run: uv sync --all-extras
+
+      - name: Generate requirements-snyk.txt for Snyk
+        run: make requirements-snyk
+
+      - name: Run Snyk to check for vulnerabilities
+        uses: snyk/actions/python@master
+        continue-on-error: true
+        env:
+          SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+        with:
+          args: --severity-threshold=high --package-manager=pip --file=requirements-snyk.txt --project-name=testapp --sarif-file-output=snyk.sarif
+          
+      - name: Create empty SARIF if Snyk didn't generate one
+        if: always()
+        run: |
+          if [ ! -f snyk.sarif ]; then
+            echo '{"version":"2.1.0","$schema":"https://raw.githubusercontent.com/oasis-tcs/sarif-spec/master/Schemata/sarif-schema-2.1.0.json","runs":[{"tool":{"driver":{"name":"Snyk","version":"1.0.0"}},"results":[]}]}' > snyk.sarif
+          fi
+
+      - name: Upload Snyk results to GitHub Code Scanning (if enabled)
+        if: always() && github.event_name != 'pull_request'
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: snyk.sarif
+          category: snyk
+        continue-on-error: true
+
+      - name: Upload Snyk results as artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: snyk-results
+          path: snyk.sarif
+        continue-on-error: true
+
+      - name: Snyk Monitor (Track dependencies)
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: snyk/actions/python@master
+        env:
+          SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+        with:
+          command: monitor
+          args: --package-manager=pip --file=requirements-snyk.txt --project-name=testapp --skip-unresolved
+
+  # Job 3: SAST (Static Application Security Testing)
+  sast-scan:
+    name: Static Application Security Testing
+    runs-on: ${{ vars.RUNS_ON }}
+    if: ${{ !contains(github.event.head_commit.message, '[skip ci]') && !contains(github.event.head_commit.message, '[ci skip]') }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Python and UV
+        uses: astral-sh/setup-uv@v2
+        with:
+          version: "latest"
+          enable-cache: false
+
+      - name: Install dependencies
+        run: uv sync --all-extras
+
+      - name: Install security tools
+        run: |
+          uv pip install bandit[toml] safety
+          pip install semgrep
+
+      - name: Run Bandit (Python Security Linter)
+        run: |
+          uv run bandit -r src/testapp/ -f json -o bandit-report.json || true
+          uv run bandit -r src/testapp/ -f txt
+
+      - name: Run Safety (Known Security Vulnerabilities)
+        run: |
+          uv run safety check --json --output safety-report.json || true
+          uv run safety check
+
+      - name: Run Semgrep (SAST)
+        env:
+          SEMGREP_APP_TOKEN: ${{ secrets.SEMGREP_APP_TOKEN }}
+        run: |
+          semgrep --config=auto --json --output=semgrep-report.json src/ || true
+          semgrep --config=auto src/
+
+      - name: Upload SAST results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sast-reports
+          path: |
+            bandit-report.json
+            safety-report.json
+            semgrep-report.json
+
+  container-scan:
+    name: Container Security Scan
+    runs-on: ${{ vars.RUNS_ON }}
+    if: ${{ !contains(github.event.head_commit.message, '[skip ci]') && !contains(github.event.head_commit.message, '[ci skip]') }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build Docker image for scanning
+        run: |
+          docker build -f Dockerfile -t testapp:scan-latest .
+
+      - name: Install Trivy
+        run: |
+          sudo apt-get update
+          sudo apt-get install wget apt-transport-https gnupg lsb-release
+          wget -qO - https://aquasecurity.github.io/trivy-repo/deb/public.key | sudo apt-key add -
+          echo "deb https://aquasecurity.github.io/trivy-repo/deb $(lsb_release -sc) main" | sudo tee -a /etc/apt/sources.list.d/trivy.list
+          sudo apt-get update
+          sudo apt-get install trivy
+
+      - name: Run Trivy vulnerability scanner
+        run: |
+          trivy image --format sarif --output trivy-results.sarif testapp:scan-latest || true
+          trivy image --severity HIGH,CRITICAL testapp:scan-latest
+
+      - name: Upload Trivy scan results to GitHub Code Scanning (if enabled)
+        if: always() && github.event_name != 'pull_request'
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: trivy-results.sarif
+          category: trivy
+        continue-on-error: true
+
+      - name: Upload Trivy results as artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: trivy-results
+          path: trivy-results.sarif
+        continue-on-error: true
+
+      - name: Run Snyk Container scan
+        if: env.SNYK_TOKEN != ''
+        uses: snyk/actions/docker@master
+        env:
+          SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+        with:
+          image: testapp:scan-latest
+          args: --severity-threshold=high --fail-on=upgradable
+
+  license-scan:
+    name: License Compliance Scan
+    runs-on: ${{ vars.RUNS_ON }}
+    if: ${{ !contains(github.event.head_commit.message, '[skip ci]') && !contains(github.event.head_commit.message, '[ci skip]') }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Python and UV
+        uses: astral-sh/setup-uv@v2
+        with:
+          version: "latest"
+          enable-cache: false
+
+      - name: Install dependencies
+        run: uv sync --all-extras
+
+      - name: Install license scanner
+        run: uv pip install pip-licenses
+
+      - name: Scan Python licenses
+        run: |
+          uv run pip-licenses --format=json --output-file python-licenses.json
+          uv run pip-licenses --format=plain
+
+      - name: Upload license scan results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: license-reports
+          path: python-licenses.json
+
+  policy-validation:
+    name: Security Policy Validation
+    runs-on: ${{ vars.RUNS_ON }}
+    if: ${{ !contains(github.event.head_commit.message, '[skip ci]') && !contains(github.event.head_commit.message, '[ci skip]') && github.event_name == 'pull_request' }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Check for security policy compliance
+        run: |
+          # Check for SECURITY.md
+          if [ ! -f "SECURITY.md" ]; then
+            echo "❌ SECURITY.md file is missing"
+            exit 1
+          fi
+          
+          # Check for sensitive files in git history
+          if git log --all --full-history --pretty=format: --name-only | grep -E '\.(key|pem|p12|jks)$'; then
+            echo "❌ Sensitive files detected in git history"
+            exit 1
+          fi
+          
+          # Check Django settings for production readiness
+          if grep -q "DEBUG = True" src/testapp/settings.py; then
+            echo "❌ DEBUG mode is enabled in settings.py"
+            exit 1
+          fi
+          
+          echo "✅ Basic security policy checks passed"
+
+  security-summary:
+    name: Security Summary
+    runs-on: ${{ vars.RUNS_ON }}
+    needs: [secret-scan, dependency-scan, sast-scan, container-scan, license-scan, policy-validation]
+    if: ${{ always() && !contains(github.event.head_commit.message, '[skip ci]') && !contains(github.event.head_commit.message, '[ci skip]') }}
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+
+      - name: Generate Security Summary
+        run: |
+          echo "# Security Scan Summary" > security-summary.md
+          echo "Date: $(date)" >> security-summary.md
+          echo "Commit: ${{ github.sha }}" >> security-summary.md
+          echo "" >> security-summary.md
+          
+          echo "## Scan Results:" >> security-summary.md
+          echo "- ✅ Secret Scanning (Gitleaks): ${{ needs.secret-scan.result }}" >> security-summary.md
+          echo "- ✅ Dependency Scanning (Snyk): ${{ needs.dependency-scan.result }}" >> security-summary.md
+          echo "- ✅ SAST Scanning: ${{ needs.sast-scan.result }}" >> security-summary.md
+          echo "- ✅ Container Scanning: ${{ needs.container-scan.result }}" >> security-summary.md
+          echo "- ✅ License Scanning: ${{ needs.license-scan.result }}" >> security-summary.md
+          
+          cat security-summary.md
+
+      - name: Upload Security Summary
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: security-summary
+          path: security-summary.md
+
+      - name: Comment PR with Security Summary
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const summary = fs.readFileSync('security-summary.md', 'utf8');
+            
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: `## 🔒 Security Scan Results\n\n${summary}`
+            });
+
+  tests:
+    name: Tests Code
+    runs-on: ${{ vars.RUNS_ON }}     
+    if: ${{ !contains(github.event.head_commit.message, '[skip ci]') && !contains(github.event.head_commit.message, '[ci skip]') }} 
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+          
+      - name: Cache UV dependencies
+        uses: actions/cache@v4
+        continue-on-error: true
+        with:
+          path: |
+            ~/.cache/uv
+            .venv
+          key: uv-${{ runner.os }}-${{ hashFiles('pyproject.toml', 'uv.lock') }}
+          restore-keys: |
+            uv-${{ runner.os }}-
+          
+      - name: Setup Python and UV
+        uses: astral-sh/setup-uv@v2
+        with:
+          version: "latest"
+          enable-cache: true
+          cache-dependency-glob: "pyproject.toml"
+          
+      - name: Cache SOPS binary
+        uses: actions/cache@v4
+        continue-on-error: true
+        id: cache-sops
+        with:
+          path: /tmp/sops.deb
+          key: sops-3.10.2-amd64
+          
+      - name: Install SOPS
+        run: |
+          # Download SOPS if not cached
+          if [ ! -f /tmp/sops.deb ]; then
+            echo "Downloading SOPS..."
+            wget -O /tmp/sops.deb https://github.com/mozilla/sops/releases/download/v3.10.2/sops_3.10.2_amd64.deb
+          else
+            echo "Using cached SOPS binary"
+          fi
+          
+          # Install SOPS
+          sudo dpkg -i /tmp/sops.deb
+          
+      - name: Install application dependencies
+        run: |
+          uv sync --group dev
+          
+      - name: Run security scanning with Semgrep
+        run: |
+          uv run semgrep --config=auto src/ || true
+          
+      - name: Test application
+        env:
+          SECRET_KEY: django-test-secret-key-for-ci
+          ENVIRONMENT: testing
+          DEBUG: false
+          REQUIRED_SETTING: test-value-for-ci
+          EMAIL_URL: smtp://localhost:25
+        run: |
+          mkdir -p logs
+          mkdir -p src/static
+          cd src
+          uv run python -u manage.py test
+
+  build:
+    name: Build and Push Docker Image
+    runs-on: ${{ vars.RUNS_ON }}
+    needs: [secret-scan, dependency-scan, sast-scan, container-scan, license-scan, tests]
+    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master' || github.event_name == 'workflow_dispatch'
+    concurrency:
+      group: build-${{ github.ref }}
+      cancel-in-progress: false
+    
+    permissions:
+      id-token: write
+      contents: write
+      pull-requests: write
+      issues: write
+    
+    steps:
+      - name: GitHub Actions Bot Configuration
+        id: bot_config
+        env:
+          GITHUB_BOT_EMAIL: 'github-actions[bot]@users.noreply.github.com'
+          GITHUB_BOT_USERNAME: "github-actions[bot]"
+        shell: bash -l {0}
+        run: |
+          #!/usr/bin/env bash
+
+          set -euo pipefail
+
+          echo "GITHUB_BOT_EMAIL=${{ env.GITHUB_BOT_EMAIL }}" >> $GITHUB_ENV
+          echo "GITHUB_BOT_USERNAME=${{ env.GITHUB_BOT_USERNAME }}" >> $GITHUB_ENV
+
+          git config --global author.email "${{ env.GITHUB_BOT_EMAIL }}"
+          git config --global author.name "${{ env.GITHUB_BOT_USERNAME }}"
+          git config --global committer.email "${{ env.GITHUB_BOT_EMAIL }}"
+          git config --global committer.name "${{ env.GITHUB_BOT_USERNAME }}"
+          git config --global init.defaultBranch ${{ github.event.repository.default_branch }}
+          git config --global pull.ff only
+          git config --global pull.rebase true
+          git config --global push.autosetupremote true
+          git config --global push.followTags true
+          git config --global user.email "${{ env.GITHUB_BOT_EMAIL }}"
+          git config --global user.name "${{ env.GITHUB_BOT_USERNAME }}"
+
+          echo "Initializing Git Repository..."
+          git init ${{ github.workspace }}
+          
+          echo "bot_email=${{ env.GITHUB_BOT_EMAIL }}" >> $GITHUB_OUTPUT
+          echo "bot_user=${{ env.GITHUB_BOT_USERNAME }}" >> $GITHUB_OUTPUT
+
+      - name: Generate GitHub App Token
+        uses: actions/create-github-app-token@v2
+        id: app-token
+        with:
+          app-id: ${{ vars.APP_ID }}
+          private-key: ${{ secrets.PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+          
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install GitVersion
+        id: install_gitversion
+        uses: gittools/actions/gitversion/setup@v4.1.0
+        with:
+          versionSpec: ${{ vars.GITVERSION_SPEC }}
+
+      - name: Determine Version
+        id: gitversion
+        uses: gittools/actions/gitversion/execute@v4.1.0
+        
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4.3.1
+        with:
+          role-to-assume: arn:aws:iam::892193016253:role/github-actions-role
+          role-session-name: github-actions
+          aws-region: ${{ vars.AWS_DEFAULT_REGION }}
+          output-credentials: true
+          
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+        
+      - name: Create ECR repository if it doesn't exist
+        run: |
+          # Check if repository exists, create if it doesn't
+          if ! aws ecr describe-repositories --repository-names $ECR_REPOSITORY >/dev/null 2>&1; then
+            echo "Creating ECR repository: $ECR_REPOSITORY"
+            aws ecr create-repository \
+              --repository-name $ECR_REPOSITORY \
+              --image-scanning-configuration scanOnPush=true \
+              --encryption-configuration encryptionType=AES256
+            
+            # Set lifecycle policy to keep only the last 10 images
+            aws ecr put-lifecycle-policy \
+              --repository-name $ECR_REPOSITORY \
+              --lifecycle-policy-text '{
+                "rules": [
+                  {
+                    "rulePriority": 1,
+                    "description": "Keep last 10 images",
+                    "selection": {
+                      "tagStatus": "any",
+                      "countType": "imageCountMoreThan",
+                      "countNumber": 10
+                    },
+                    "action": {
+                      "type": "expire"
+                    }
+                  }
+                ]
+              }'
+            
+            echo "✅ ECR repository created with lifecycle policy"
+          else
+            echo "✅ ECR repository already exists: $ECR_REPOSITORY"
+          fi
+
+      - name: Docker Meta
+        id: meta
+        uses: docker/metadata-action@v5
+        env:
+          IMAGE: ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}
+        with:
+          images: ${{ env.IMAGE }}
+          tags: |
+            type=ref,event=branch
+            type=ref,event=pr
+            type=semver,pattern={{version}},value=v${{ steps.gitversion.outputs.semVer }}
+            type=semver,pattern={{major}}.{{minor}},value=v${{ steps.gitversion.outputs.semVer }}
+            type=edge,enable=true,priority=700,prefix=,suffix=,branch=${{ github.ref_name == github.event.repository.default_branch }}
+          flavor: |
+            latest=${{ github.ref_name == github.event.repository.default_branch }}
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker BuildX
+        uses: docker/setup-buildx-action@v3
+
+      - name: Docker Build and Push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile
+          build-args: |
+            COMMITSHA=${{ steps.gitversion.outputs.sha }}
+            COMMITSHASHORT=${{ steps.gitversion.outputs.shortSha }}
+            VERSION=${{ steps.gitversion.outputs.semVer }}
+          labels: ${{ steps.meta.outputs.labels }}
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}          
+
+      - name: Tag
+        id: tag
+        shell: bash -l {0}
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          #!/usr/bin/env bash
+
+          function tagger() {
+            VERSION=$1
+            echo "Releasing Version: ${VERSION}"
+            TAG_EXISTS=$(git ls-remote -q --tags | grep -q "refs/tags/${VERSION}$" && echo true || echo false)
+            if [[ "${TAG_EXISTS}" = true ]];
+            then
+              HAS_RELEASE=$(gh release list --json tagName -q '.[].tagName' | grep -E "^(${VERSION})$" && echo true || echo false)
+              if [[ "${HAS_RELEASE}" == true ]];
+              then
+                gh release delete --yes ${VERSION}
+              fi
+              git push origin --delete ${VERSION}
+              git tag -d ${VERSION}
+            fi
+
+            echo
+            git tag -a ${VERSION} -m "chore: Release Version ${VERSION}"
+            git push -f --tags --follow-tags
+            git push --set-upstream origin ${{ github.ref_name }}
+            echo
+            echo
+          }
+
+          tagger "v${{ steps.gitversion.outputs.semVer }}"
+          if [[ "${{ github.ref_name  }}" == "${{ github.event.repository.default_branch }}" ]];
+          then
+            tagger "v${{ steps.gitversion.outputs.major }}.${{ steps.gitversion.outputs.minor }}"
+            tagger "v${{ steps.gitversion.outputs.major }}"
+          fi
+
+      - name: Release
+        id: release
+        shell: bash -l {0}
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          #!/usr/bin/env bash
+
+          if [[ "${{ github.ref_name  }}" == "${{ github.event.repository.default_branch }}" ]];
+          then
+            gh release list | grep Draft | awk '{print $1 " \t"}' | while read -r draft; do echo "Removing Draft Releases: ${draft}"; gh release delete --yes "${draft}"; done
+            gh release create v${{ steps.gitversion.outputs.semVer }} --generate-notes --verify-tag --latest
+          fi
