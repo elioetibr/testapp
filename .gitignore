@@ -2012,6 +2012,7 @@ infrastructure/cdk.context.json
 # Auto-generated CI/CD reports (but keep requirements-snyk.txt for Snyk scanning)
 bandit-report.json     # Bandit security report
 results.sarif          # Gitleaks SARIF report
+requirements-snyk.txt  # Ignored It's generate during workflow to snyk scan
 
 ### End of Personal Ignores ###
 
@@ -2019,3 +2020,4 @@ results.sarif          # Gitleaks SARIF report
 !/infrastructure/bin/
 !/infrastructure/lib/
 ### End of Personal Always Add ###
+requirements-snyk.txt

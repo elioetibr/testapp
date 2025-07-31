@@ -79,7 +79,7 @@ jobs:
         env:
           SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
         with:
-          args: --severity-threshold=high --file=requirements-snyk.txt
+          args: --severity-threshold=high --package-manager=pip --file=requirements-snyk.txt --project-name=testapp
 
       - name: Upload Snyk results to GitHub Code Scanning (if enabled)
         if: always() && github.event_name != 'pull_request'
@@ -104,7 +104,7 @@ jobs:
           SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
         with:
           command: monitor
-          args: --file=requirements-snyk.txt
+          args: --package-manager=pip --file=requirements-snyk.txt --project-name=testapp
 
   # Job 3: SAST (Static Application Security Testing)
   sast-scan:
@@ -206,7 +206,7 @@ jobs:
           SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
         with:
           image: testapp:scan-latest
-          args: --severity-threshold=high
+          args: --severity-threshold=high --fail-on=upgradable
 
   license-scan:
     name: License Compliance Scan

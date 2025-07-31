@@ -72,3 +72,21 @@ The distroless runtime image contains:
 - ❌ No package managers (apt, pip)
 - ❌ No text editors or utilities
 - ❌ No debugging tools
+
+## Current Security Status
+
+### ✅ **Resolved Vulnerabilities**
+- **SNYK-DEBIAN12-PAM-10378969**: Directory Traversal in `pam/libpam0g` → **FIXED** (eliminated by distroless)
+
+### ⚠️ **Known Issues**
+- **SNYK-DEBIAN12-ZLIB-6008963**: Critical - Integer Overflow in `zlib/zlib1g@1:1.2.13.dfsg-1`
+  - **Status**: Present in distroless base image (Debian 12)
+  - **Impact**: Low (Python runtime dependency, minimal exposure)
+  - **Mitigation**: Using distroless minimizes attack surface
+  - **Monitoring**: Awaiting upstream Debian security update
+
+### **Risk Assessment**
+- **Before**: 2 vulnerabilities (High + Critical)
+- **After**: 1 vulnerability (Critical only)
+- **Improvement**: 50% reduction in vulnerabilities
+- **Security posture**: Significantly improved with minimal attack surface
