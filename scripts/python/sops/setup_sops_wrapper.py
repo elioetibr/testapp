@@ -13,7 +13,7 @@ def install_dependencies():
     dependencies = [
         "PyYAML>=6.0",
     ]
-    
+
     print("Installing SOPS wrapper dependencies...")
     for dep in dependencies:
         try:
@@ -24,7 +24,7 @@ def install_dependencies():
         except subprocess.CalledProcessError as e:
             print(f"❌ Failed to install {dep}: {e}")
             return False
-    
+
     return True
 
 
@@ -37,26 +37,24 @@ def make_executable():
     else:
         print(f"❌ Script not found: {script_path}")
         return False
-    
+
     return True
 
 
 def create_symlinks():
     """Create convenient symlinks for the wrapper."""
-    script_path = Path(__file__).parent / "sops_wrapper.py"
-    
     symlinks = [
         ("sops-encrypt", "encrypt"),
         ("sops-decrypt", "decrypt"),
     ]
-    
+
     for link_name, action in symlinks:
         link_path = Path(__file__).parent / link_name
-        
+
         # Remove existing symlink if it exists
         if link_path.exists() or link_path.is_symlink():
             link_path.unlink()
-        
+
         try:
             # Create a wrapper script instead of symlink for better portability
             wrapper_content = f"""#!/usr/bin/env python3
@@ -77,13 +75,13 @@ if len(sys.argv) == 1 or sys.argv[1] not in ["encrypt", "decrypt"]:
 if __name__ == "__main__":
     main()
 """
-            
-            with open(link_path, 'w') as f:
+
+            with open(link_path, "w") as f:
                 f.write(wrapper_content)
-            
+
             link_path.chmod(0o755)
             print(f"✅ Created wrapper: {link_name}")
-            
+
         except Exception as e:
             print(f"❌ Failed to create wrapper {link_name}: {e}")
 
@@ -115,33 +113,33 @@ def verify_sops():
 def main():
     """Main setup function."""
     print("Setting up SOPS Python wrapper...\n")
-    
+
     success = True
-    
+
     # Check SOPS availability
     if not verify_sops():
         print("\n⚠️  Warning: SOPS is not available. The wrapper will not work without it.")
         success = False
-    
+
     print()
-    
+
     # Install dependencies
     if not install_dependencies():
         success = False
-    
+
     print()
-    
+
     # Make script executable
     if not make_executable():
         success = False
-    
+
     print()
-    
+
     # Create convenience wrappers
     create_symlinks()
-    
+
     print()
-    
+
     if success:
         print("✅ Setup completed successfully!")
         print("\nUsage examples:")

@@ -1,7 +1,7 @@
 # Makefile for TestApp Container Management
 # Usage: make <target>
 
-.PHONY: help build build-dev build-prod run run-dev run-prod stop clean test logs shell sops-setup sops-encrypt sops-decrypt sops-encrypt-pattern sops-decrypt-pattern sops-to-act sops-test requirements-snyk
+.PHONY: help build build-dev build-prod run run-dev run-prod stop clean test logs shell sops-setup sops-encrypt sops-decrypt sops-encrypt-pattern sops-decrypt-pattern sops-to-act sops-test requirements-snyk lint format test-django test-coverage install sync check security audit
 
 # Default target
 .DEFAULT_GOAL := help
@@ -203,3 +203,60 @@ requirements-snyk: ## Generate requirements-snyk.txt for Snyk dependency scannin
 	@uv export --format requirements-txt --group production --no-hashes | grep -E "^[a-zA-Z0-9].*==" >> requirements-snyk.txt
 	@echo "$(GREEN)✅ Successfully generated requirements-snyk.txt$(NC)"
 	@echo "$(YELLOW)📋 File contains $$(grep -c "==" requirements-snyk.txt) production dependencies$(NC)"
+
+# UV Development Tools
+install: ## Install project dependencies
+	@echo "$(BLUE)📦 Installing project dependencies...$(NC)"
+	@uv sync
+	@echo "$(GREEN)✅ Dependencies installed successfully$(NC)"
+
+sync: ## Sync dependencies and update lock file
+	@echo "$(BLUE)🔄 Syncing dependencies...$(NC)"
+	@uv sync --upgrade
+	@echo "$(GREEN)✅ Dependencies synced successfully$(NC)"
+
+# Code Quality Tools
+lint: ## Run ruff linter to check code quality
+	@echo "$(BLUE)🔍 Running ruff linter...$(NC)"
+	@uv run ruff check .
+	@echo "$(GREEN)✅ Linting completed$(NC)"
+
+format: ## Format code with ruff
+	@echo "$(BLUE)🎨 Formatting code with ruff...$(NC)"
+	@uv run ruff format .
+	@uv run ruff check --fix .
+	@echo "$(GREEN)✅ Code formatting completed$(NC)"
+
+# Testing Tools
+test-django: ## Run Django tests
+	@echo "$(BLUE)🧪 Running Django tests...$(NC)"
+	@mkdir -p logs src/static
+	@cd src && SECRET_KEY=django-test-secret-key-for-ci ENVIRONMENT=testing DEBUG=false REQUIRED_SETTING=test-value-for-ci EMAIL_URL=smtp://localhost:25 uv run python -u manage.py test
+	@echo "$(GREEN)✅ Django tests completed$(NC)"
+
+test-coverage: ## Run Django tests with coverage
+	@echo "$(BLUE)📊 Running Django tests with coverage...$(NC)"
+	@mkdir -p logs src/static
+	@cd src && SECRET_KEY=django-test-secret-key-for-ci ENVIRONMENT=testing DEBUG=false REQUIRED_SETTING=test-value-for-ci EMAIL_URL=smtp://localhost:25 uv run coverage run --source='testapp' manage.py test
+	@cd src && uv run coverage report
+	@cd src && uv run coverage html
+	@echo "$(GREEN)✅ Coverage report generated at src/htmlcov/index.html$(NC)"
+
+check: ## Run Django system checks
+	@echo "$(BLUE)✔️  Running Django system checks...$(NC)"
+	@mkdir -p logs src/static
+	@cd src && SECRET_KEY=django-test-secret-key-for-ci ENVIRONMENT=testing DEBUG=false REQUIRED_SETTING=test-value-for-ci EMAIL_URL=smtp://localhost:25 uv run python -u manage.py check
+	@echo "$(GREEN)✅ System checks passed$(NC)"
+
+# Security Tools
+security: ## Run security scans with bandit
+	@echo "$(BLUE)🔒 Running security scan with bandit...$(NC)"
+	@uv run bandit -r src/ -f json -o bandit-report.json || true
+	@uv run bandit -r src/ || true
+	@echo "$(GREEN)✅ Security scan completed$(NC)"
+
+audit: ## Run pip-audit to check for known vulnerabilities
+	@echo "$(BLUE)🔍 Running pip-audit for vulnerability check...$(NC)"
+	@uv run pip-audit --format=json --output=pip-audit-report.json || true
+	@uv run pip-audit || true
+	@echo "$(GREEN)✅ Vulnerability audit completed$(NC)"

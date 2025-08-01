@@ -384,7 +384,7 @@ jobs:
         run: |
           uv run semgrep --config=auto src/ || true
           
-      - name: Test application
+      - name: Test application with coverage
         env:
           SECRET_KEY: django-test-secret-key-for-ci
           ENVIRONMENT: testing
@@ -395,7 +395,17 @@ jobs:
           mkdir -p logs
           mkdir -p src/static
           cd src
-          uv run python -u manage.py test
+          uv run coverage run --source='testapp' manage.py test
+          uv run coverage report
+          uv run coverage xml -o coverage.xml
+
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v4
+        with:
+          file: ./src/coverage.xml
+          fail_ci_if_error: false
+          verbose: true
+        continue-on-error: true
 
   build:
     name: Build and Push Docker Image
@@ -559,19 +569,105 @@ jobs:
         run: |
           #!/usr/bin/env bash
 
+          function version_compare() {
+            # Compare two semantic versions
+            # Returns: 0 if equal, 1 if $1 > $2, 2 if $1 < $2
+            if [[ "$1" == "$2" ]]; then
+              return 0
+            fi
+            
+            local IFS=.
+            local i ver1=($1) ver2=($2)
+            
+            # Fill empty fields with zeros
+            for ((i=${#ver1[@]}; i<${#ver2[@]}; i++)); do
+              ver1[i]=0
+            done
+            for ((i=${#ver2[@]}; i<${#ver1[@]}; i++)); do
+              ver2[i]=0
+            done
+            
+            # Compare each component
+            for ((i=0; i<${#ver1[@]}; i++)); do
+              if [[ ${ver1[i]} -gt ${ver2[i]} ]]; then
+                return 1
+              fi
+              if [[ ${ver1[i]} -lt ${ver2[i]} ]]; then
+                return 2
+              fi
+            done
+            return 0
+          }
+
+          function should_update_tag() {
+            local TARGET_TAG=$1
+            local CURRENT_VERSION=$2
+            
+            # Get existing tag version if it exists
+            local EXISTING_VERSION=$(git ls-remote -q --tags | grep "refs/tags/${TARGET_TAG}$" | head -1)
+            if [[ -z "$EXISTING_VERSION" ]]; then
+              echo "true"  # No existing tag, safe to create
+              return
+            fi
+            
+            # Extract version from the existing tag by finding the most recent semver tag with this prefix
+            local EXISTING_SEMVER=$(git ls-remote -q --tags | \
+              grep -E "refs/tags/${TARGET_TAG}(\.[0-9]+)*-[0-9]+$" | \
+              sort -V | tail -1 | \
+              sed 's/.*refs\/tags\///' | \
+              sed 's/-[0-9]*$//')
+            
+            if [[ -z "$EXISTING_SEMVER" ]]; then
+              echo "true"  # Can't determine existing version, allow update
+              return
+            fi
+            
+            # Remove 'v' prefix for comparison
+            local CURRENT_CLEAN=${CURRENT_VERSION#v}
+            local EXISTING_CLEAN=${EXISTING_SEMVER#v}
+            
+            version_compare "$CURRENT_CLEAN" "$EXISTING_CLEAN"
+            case $? in
+              0|1) echo "true" ;;   # Current >= Existing, allow update
+              2) echo "false" ;;    # Current < Existing, prevent overwrite
+            esac
+          }
+
           function tagger() {
             VERSION=$1
             echo "Releasing Version: ${VERSION}"
-            TAG_EXISTS=$(git ls-remote -q --tags | grep -q "refs/tags/${VERSION}$" && echo true || echo false)
-            if [[ "${TAG_EXISTS}" = true ]];
-            then
-              HAS_RELEASE=$(gh release list --json tagName -q '.[].tagName' | grep -E "^(${VERSION})$" && echo true || echo false)
-              if [[ "${HAS_RELEASE}" == true ]];
-              then
-                gh release delete --yes ${VERSION}
+            
+            # For specific semver tags (with build numbers), always proceed
+            if [[ "$VERSION" =~ -[0-9]+$ ]]; then
+              TAG_EXISTS=$(git ls-remote -q --tags | grep -q "refs/tags/${VERSION}$" && echo true || echo false)
+              if [[ "${TAG_EXISTS}" = true ]]; then
+                HAS_RELEASE=$(gh release list --json tagName -q '.[].tagName' | grep -E "^(${VERSION})$" && echo true || echo false)
+                if [[ "${HAS_RELEASE}" == true ]]; then
+                  gh release delete --yes ${VERSION}
+                fi
+                git push origin --delete ${VERSION}
+                git tag -d ${VERSION}
               fi
-              git push origin --delete ${VERSION}
-              git tag -d ${VERSION}
+            else
+              # For major/minor tags, check if we should update
+              local CURRENT_SEMVER="v${{ steps.gitversion.outputs.semVer }}"
+              local SHOULD_UPDATE=$(should_update_tag "$VERSION" "$CURRENT_SEMVER")
+              
+              if [[ "$SHOULD_UPDATE" == "false" ]]; then
+                echo "⚠️  Skipping $VERSION - current version ($CURRENT_SEMVER) is older than existing tag"
+                return
+              fi
+              
+              TAG_EXISTS=$(git ls-remote -q --tags | grep -q "refs/tags/${VERSION}$" && echo true || echo false)
+              if [[ "${TAG_EXISTS}" = true ]]; then
+                echo "🔄 Updating existing tag $VERSION with newer version"
+                HAS_RELEASE=$(gh release list --json tagName -q '.[].tagName' | grep -E "^(${VERSION})$" && echo true || echo false)
+                if [[ "${HAS_RELEASE}" == true ]]; then
+                  gh release delete --yes ${VERSION}
+                fi
+                git push origin --delete ${VERSION}
+                git tag -d ${VERSION}
+              fi
             fi
 
             echo
@@ -585,6 +681,7 @@ jobs:
           tagger "v${{ steps.gitversion.outputs.semVer }}"
           if [[ "${{ github.ref_name  }}" == "${{ github.event.repository.default_branch }}" ]];
           then
+            tagger "v${{ steps.gitversion.outputs.majorMinorPatch }}"
             tagger "v${{ steps.gitversion.outputs.major }}.${{ steps.gitversion.outputs.minor }}"
             tagger "v${{ steps.gitversion.outputs.major }}"
           fi
