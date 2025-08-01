@@ -610,26 +610,36 @@ jobs:
               return
             fi
             
-            # Extract version from the existing tag by finding the most recent semver tag with this prefix
-            local EXISTING_SEMVER=$(git ls-remote -q --tags | \
-              grep -E "refs/tags/${TARGET_TAG}(\.[0-9]+)*-[0-9]+$" | \
-              sort -V | tail -1 | \
-              sed 's/.*refs\/tags\///' | \
-              sed 's/-[0-9]*$//')
+            # Extract the base version from current (remove build number)
+            local CURRENT_BASE=${CURRENT_VERSION#v}
+            CURRENT_BASE=${CURRENT_BASE%-*}  # Remove -XX build number
             
-            if [[ -z "$EXISTING_SEMVER" ]]; then
-              echo "true"  # Can't determine existing version, allow update
+            # For TARGET_TAG, we need to check what base version it represents
+            local TARGET_BASE=""
+            case "$TARGET_TAG" in
+              v[0-9]*.[0-9]*.[0-9]*)  # v0.0.1 format
+                TARGET_BASE=${TARGET_TAG#v}
+                ;;
+              v[0-9]*.[0-9]*)         # v0.0 format
+                TARGET_BASE=${TARGET_TAG#v}
+                ;;
+              v[0-9]*)                # v0 format
+                TARGET_BASE=${TARGET_TAG#v}
+                ;;
+            esac
+            
+            # If current version starts with the target base, it should update the tag
+            # Example: v0.0.1-20 should update v0.0.1, v0.0, v0 tags
+            if [[ "$CURRENT_BASE" == "$TARGET_BASE"* ]]; then
+              echo "true"  # Same base version or newer, allow update
               return
             fi
             
-            # Remove 'v' prefix for comparison
-            local CURRENT_CLEAN=${CURRENT_VERSION#v}
-            local EXISTING_CLEAN=${EXISTING_SEMVER#v}
-            
-            version_compare "$CURRENT_CLEAN" "$EXISTING_CLEAN"
+            # Compare base versions to see if current is newer
+            version_compare "$CURRENT_BASE" "$TARGET_BASE"
             case $? in
-              0|1) echo "true" ;;   # Current >= Existing, allow update
-              2) echo "false" ;;    # Current < Existing, prevent overwrite
+              0|1) echo "true" ;;   # Current >= Target base, allow update
+              2) echo "false" ;;    # Current < Target base, prevent overwrite
             esac
           }
 
