@@ -1,7 +1,7 @@
 # Makefile for TestApp Container Management
 # Usage: make <target>
 
-.PHONY: help build build-dev build-prod run run-dev run-prod stop clean test logs shell sops-setup sops-encrypt sops-decrypt sops-encrypt-pattern sops-decrypt-pattern sops-to-act sops-test requirements-snyk lint format test-django test-coverage install sync check security audit
+.PHONY: help build build-dev build-prod run run-dev run-prod stop clean test logs shell sops-setup sops-encrypt sops-decrypt sops-encrypt-pattern sops-decrypt-pattern sops-to-act sops-test requirements-snyk lint format test-django test-coverage install sync check security audit infra-install infra-build infra-test infra-synth infra-diff infra-deploy infra-deploy-dev infra-deploy-prod infra-destroy infra-destroy-dev infra-destroy-prod infra-enable-waf infra-enable-flow-logs infra-enable-https infra-enable-container-security infra-disable-security infra-security-status
 
 # Default target
 .DEFAULT_GOAL := help
@@ -260,3 +260,165 @@ audit: ## Run pip-audit to check for known vulnerabilities
 	@uv run pip-audit --format=json --output=pip-audit-report.json || true
 	@uv run pip-audit || true
 	@echo "$(GREEN)✅ Vulnerability audit completed$(NC)"
+
+# Infrastructure Tools (AWS CDK)
+infra-install: ## Install infrastructure dependencies
+	@echo "$(BLUE)📦 Installing CDK infrastructure dependencies...$(NC)"
+	@cd infrastructure && npm install
+	@echo "$(GREEN)✅ Infrastructure dependencies installed$(NC)"
+
+infra-build: ## Build infrastructure TypeScript
+	@echo "$(BLUE)🔨 Building infrastructure TypeScript...$(NC)"
+	@cd infrastructure && npm run build
+	@echo "$(GREEN)✅ Infrastructure built successfully$(NC)"
+
+infra-test: ## Run infrastructure tests
+	@echo "$(BLUE)🧪 Running infrastructure tests...$(NC)"
+	@cd infrastructure && npm test
+	@echo "$(GREEN)✅ Infrastructure tests completed$(NC)"
+
+infra-synth: infra-build ## Synthesize CloudFormation templates
+	@echo "$(BLUE)📋 Synthesizing CloudFormation templates...$(NC)"
+	@cd infrastructure && npm run synth
+	@echo "$(GREEN)✅ CloudFormation templates generated in infrastructure/cdk.out/$(NC)"
+
+infra-diff: infra-build ## Show infrastructure changes
+	@echo "$(BLUE)🔍 Showing infrastructure diff...$(NC)"
+	@cd infrastructure && npm run diff
+	@echo "$(GREEN)✅ Infrastructure diff completed$(NC)"
+
+infra-deploy: infra-deploy-dev ## Deploy to default (dev) environment
+
+infra-deploy-dev: infra-build ## Deploy infrastructure to development environment
+	@echo "$(BLUE)🚀 Deploying infrastructure to development...$(NC)"
+	@cd infrastructure && npm run deploy -- TestApp-dev --require-approval never
+	@echo "$(GREEN)✅ Development infrastructure deployed$(NC)"
+
+infra-deploy-prod: infra-build ## Deploy infrastructure to production environment
+	@echo "$(BLUE)🚀 Deploying infrastructure to production...$(NC)"
+	@echo "$(YELLOW)⚠️  This will deploy to PRODUCTION environment$(NC)"
+	@read -p "Are you sure? Type 'yes' to continue: " confirm; \
+	if [ "$$confirm" = "yes" ]; then \
+		cd infrastructure && npm run deploy -- TestApp-production --require-approval never; \
+		echo "$(GREEN)✅ Production infrastructure deployed$(NC)"; \
+	else \
+		echo "$(YELLOW)🚫 Production deployment cancelled$(NC)"; \
+	fi
+
+infra-destroy: infra-destroy-dev ## Destroy default (dev) environment
+
+infra-destroy-dev: ## Destroy development infrastructure
+	@echo "$(BLUE)💥 Destroying development infrastructure...$(NC)"
+	@echo "$(YELLOW)⚠️  This will DELETE all development resources$(NC)"
+	@read -p "Are you sure? Type 'yes' to continue: " confirm; \
+	if [ "$$confirm" = "yes" ]; then \
+		cd infrastructure && npx cdk destroy TestApp-dev --force; \
+		echo "$(GREEN)✅ Development infrastructure destroyed$(NC)"; \
+	else \
+		echo "$(YELLOW)🚫 Development destroy cancelled$(NC)"; \
+	fi
+
+infra-destroy-prod: ## Destroy production infrastructure
+	@echo "$(BLUE)💥 Destroying production infrastructure...$(NC)"
+	@echo "$(RED)⚠️  WARNING: This will DELETE all PRODUCTION resources!$(NC)"
+	@echo "$(RED)⚠️  This action is IRREVERSIBLE!$(NC)"
+	@read -p "Type 'DELETE-PRODUCTION' to confirm: " confirm; \
+	if [ "$$confirm" = "DELETE-PRODUCTION" ]; then \
+		cd infrastructure && npx cdk destroy TestApp-production --force; \
+		echo "$(GREEN)✅ Production infrastructure destroyed$(NC)"; \
+	else \
+		echo "$(YELLOW)🚫 Production destroy cancelled$(NC)"; \
+	fi
+
+# Security Enhancement Commands
+infra-enable-waf: ## Enable WAF protection for infrastructure
+	@echo "$(BLUE)🔒 Enabling WAF protection...$(NC)"
+	@echo "$(YELLOW)This will modify the infrastructure configuration to enable AWS WAF$(NC)"
+	@echo "$(YELLOW)WAF provides DDoS protection and blocks common attacks$(NC)"
+	@read -p "Enable WAF? Type 'yes' to continue: " confirm; \
+	if [ "$$confirm" = "yes" ]; then \
+		sed -i '' 's/enableWAF: false/enableWAF: true/g' infrastructure/bin/testapp-infrastructure.ts; \
+		echo "$(GREEN)✅ WAF enabled in infrastructure configuration$(NC)"; \
+		echo "$(YELLOW)Run 'make infra-deploy-dev' or 'make infra-deploy-prod' to apply changes$(NC)"; \
+	else \
+		echo "$(YELLOW)🚫 WAF enablement cancelled$(NC)"; \
+	fi
+
+infra-enable-flow-logs: ## Enable VPC Flow Logs for network monitoring
+	@echo "$(BLUE)📊 Enabling VPC Flow Logs...$(NC)"
+	@echo "$(YELLOW)This will create S3 bucket and enable VPC traffic logging$(NC)"
+	@echo "$(YELLOW)Flow logs help with network monitoring and security analysis$(NC)"
+	@read -p "Enable VPC Flow Logs? Type 'yes' to continue: " confirm; \
+	if [ "$$confirm" = "yes" ]; then \
+		sed -i '' 's/enableVPCFlowLogs: false/enableVPCFlowLogs: true/g' infrastructure/bin/testapp-infrastructure.ts; \
+		echo "$(GREEN)✅ VPC Flow Logs enabled in infrastructure configuration$(NC)"; \
+		echo "$(YELLOW)Run 'make infra-deploy-dev' or 'make infra-deploy-prod' to apply changes$(NC)"; \
+	else \
+		echo "$(YELLOW)🚫 VPC Flow Logs enablement cancelled$(NC)"; \
+	fi
+
+infra-enable-https: ## Enable HTTPS/TLS with SSL certificate
+	@echo "$(BLUE)🔐 Enabling HTTPS/TLS...$(NC)"
+	@echo "$(YELLOW)This will create SSL certificate and configure HTTPS listener$(NC)"
+	@echo "$(RED)⚠️  You must have a domain name and Route53 hosted zone configured$(NC)"
+	@read -p "Enter your domain name (e.g., example.com): " domain; \
+	if [ -n "$$domain" ]; then \
+		sed -i '' 's/enableHTTPS: false/enableHTTPS: true/g' infrastructure/bin/testapp-infrastructure.ts; \
+		sed -i '' "s/domainName: undefined/domainName: '$$domain'/g" infrastructure/bin/testapp-infrastructure.ts; \
+		echo "$(GREEN)✅ HTTPS enabled with domain: $$domain$(NC)"; \
+		echo "$(YELLOW)Run 'make infra-deploy-dev' or 'make infra-deploy-prod' to apply changes$(NC)"; \
+	else \
+		echo "$(YELLOW)🚫 HTTPS enablement cancelled - domain name required$(NC)"; \
+	fi
+
+infra-enable-container-security: ## Enable container security features (non-root user, read-only filesystem)
+	@echo "$(BLUE)🔒 Enabling container security features...$(NC)"
+	@echo "$(YELLOW)This will enable:$(NC)"
+	@echo "$(YELLOW)  - Non-root container user (UID/GID 1001)$(NC)"
+	@echo "$(YELLOW)  - Read-only root filesystem$(NC)"
+	@echo "$(YELLOW)  - Memory reservation limits$(NC)"
+	@read -p "Enable container security features? Type 'yes' to continue: " confirm; \
+	if [ "$$confirm" = "yes" ]; then \
+		sed -i '' 's/enableNonRootContainer: false/enableNonRootContainer: true/g' infrastructure/bin/testapp-infrastructure.ts; \
+		sed -i '' 's/enableReadOnlyRootFilesystem: false/enableReadOnlyRootFilesystem: true/g' infrastructure/bin/testapp-infrastructure.ts; \
+		echo "$(GREEN)✅ Container security features enabled$(NC)"; \
+		echo "$(YELLOW)Run 'make infra-deploy-dev' or 'make infra-deploy-prod' to apply changes$(NC)"; \
+	else \
+		echo "$(YELLOW)🚫 Container security enablement cancelled$(NC)"; \
+	fi
+
+infra-disable-security: ## Disable all security enhancements (reset to defaults)
+	@echo "$(BLUE)🔓 Disabling security enhancements...$(NC)"
+	@echo "$(YELLOW)This will reset all security features to default (disabled) state$(NC)"
+	@read -p "Disable all security features? Type 'yes' to continue: " confirm; \
+	if [ "$$confirm" = "yes" ]; then \
+		sed -i '' 's/enableWAF: true/enableWAF: false/g' infrastructure/bin/testapp-infrastructure.ts; \
+		sed -i '' 's/enableVPCFlowLogs: true/enableVPCFlowLogs: false/g' infrastructure/bin/testapp-infrastructure.ts; \
+		sed -i '' 's/enableHTTPS: true/enableHTTPS: false/g' infrastructure/bin/testapp-infrastructure.ts; \
+		sed -i '' "s/domainName: '[^']*'/domainName: undefined/g" infrastructure/bin/testapp-infrastructure.ts; \
+		sed -i '' 's/enableNonRootContainer: true/enableNonRootContainer: false/g' infrastructure/bin/testapp-infrastructure.ts; \
+		sed -i '' 's/enableReadOnlyRootFilesystem: true/enableReadOnlyRootFilesystem: false/g' infrastructure/bin/testapp-infrastructure.ts; \
+		echo "$(GREEN)✅ All security features disabled$(NC)"; \
+		echo "$(YELLOW)Run 'make infra-deploy-dev' or 'make infra-deploy-prod' to apply changes$(NC)"; \
+	else \
+		echo "$(YELLOW)🚫 Security disable cancelled$(NC)"; \
+	fi
+
+infra-security-status: ## Show current security configuration status
+	@echo "$(BLUE)🔍 Infrastructure Security Status$(NC)"
+	@echo ""
+	@echo "$(GREEN)Current Security Configuration:$(NC)"
+	@grep -E "(enableWAF|enableVPCFlowLogs|enableHTTPS|domainName|enableNonRootContainer|enableReadOnlyRootFilesystem)" infrastructure/bin/testapp-infrastructure.ts | \
+		sed 's/^[ ]*/  /' | \
+		sed 's/enableWAF: true/$(GREEN)✅ WAF Protection: ENABLED$(NC)/' | \
+		sed 's/enableWAF: false/$(RED)❌ WAF Protection: DISABLED$(NC)/' | \
+		sed 's/enableVPCFlowLogs: true/$(GREEN)✅ VPC Flow Logs: ENABLED$(NC)/' | \
+		sed 's/enableVPCFlowLogs: false/$(RED)❌ VPC Flow Logs: DISABLED$(NC)/' | \
+		sed 's/enableHTTPS: true/$(GREEN)✅ HTTPS\/TLS: ENABLED$(NC)/' | \
+		sed 's/enableHTTPS: false/$(RED)❌ HTTPS\/TLS: DISABLED$(NC)/' | \
+		sed 's/enableNonRootContainer: true/$(GREEN)✅ Non-Root Container: ENABLED$(NC)/' | \
+		sed 's/enableNonRootContainer: false/$(RED)❌ Non-Root Container: DISABLED$(NC)/' | \
+		sed 's/enableReadOnlyRootFilesystem: true/$(GREEN)✅ Read-Only Filesystem: ENABLED$(NC)/' | \
+		sed 's/enableReadOnlyRootFilesystem: false/$(RED)❌ Read-Only Filesystem: DISABLED$(NC)/' | \
+		grep -v "domainName: undefined"
+	@echo ""

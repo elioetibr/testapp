@@ -7,6 +7,9 @@ import * as logs from 'aws-cdk-lib/aws-logs';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import * as elasticloadbalancingv2 from 'aws-cdk-lib/aws-elasticloadbalancingv2';
 import * as secretsmanager from 'aws-cdk-lib/aws-secretsmanager';
+import * as wafv2 from 'aws-cdk-lib/aws-wafv2';
+import * as s3 from 'aws-cdk-lib/aws-s3';
+import * as certificatemanager from 'aws-cdk-lib/aws-certificatemanager';
 import { Construct } from 'constructs';
 import { SecretsLoader } from './secrets-loader';
 
@@ -25,6 +28,14 @@ export interface TestAppInfrastructureStackProps extends cdk.StackProps {
   privateSubnetCidrMask?: number;
   // IPv6 configuration
   ipv6CidrBlock?: string; // If not provided, AWS will assign one automatically
+  // Security enhancements (disabled by default)
+  enableWAF?: boolean;
+  enableVPCFlowLogs?: boolean;
+  enableHTTPS?: boolean;
+  domainName?: string;
+  // Container security
+  enableNonRootContainer?: boolean;
+  enableReadOnlyRootFilesystem?: boolean;
 }
 
 export class TestAppInfrastructureStack extends cdk.Stack {
@@ -34,6 +45,9 @@ export class TestAppInfrastructureStack extends cdk.Stack {
   public readonly fargateService: ecs_patterns.ApplicationLoadBalancedFargateService;
   private readonly secretsLoader: SecretsLoader;
   private readonly appSecrets: secretsmanager.Secret;
+  private readonly flowLogsBucket?: s3.Bucket;
+  private readonly webACL?: wafv2.CfnWebACL;
+  private readonly certificate?: certificatemanager.ICertificate;
 
   constructor(scope: Construct, id: string, props: TestAppInfrastructureStackProps) {
     super(scope, id, props);
@@ -44,8 +58,23 @@ export class TestAppInfrastructureStack extends cdk.Stack {
     // Create AWS Secrets Manager secret from SOPS
     this.appSecrets = this.createSecretsManagerSecret(props);
 
+    // Create VPC Flow Logs bucket (if enabled)
+    if (props.enableVPCFlowLogs) {
+      this.flowLogsBucket = this.createVPCFlowLogsBucket(props);
+    }
+
     // Create VPC with configurable IPv6 and NAT Gateway options
     this.vpc = this.createVpc(props);
+
+    // Create VPC Flow Logs (if enabled)
+    if (props.enableVPCFlowLogs && this.flowLogsBucket) {
+      this.createVPCFlowLogs(props);
+    }
+
+    // Create SSL certificate (if HTTPS enabled)
+    if (props.enableHTTPS && props.domainName) {
+      this.certificate = this.createCertificate(props);
+    }
 
     // Create ECR Repository
     this.repository = this.createEcrRepository(props);
@@ -55,6 +84,12 @@ export class TestAppInfrastructureStack extends cdk.Stack {
 
     // Create Fargate Service with Application Load Balancer
     this.fargateService = this.createFargateService(props);
+
+    // Create WAF (if enabled)
+    if (props.enableWAF) {
+      this.webACL = this.createWAF(props);
+      this.associateWAFWithALB();
+    }
 
     // Output important resources
     this.createOutputs();
@@ -199,6 +234,76 @@ export class TestAppInfrastructureStack extends cdk.Stack {
     return cluster;
   }
 
+  private createSecureTaskDefinition(props: TestAppInfrastructureStackProps, executionRole: iam.Role, taskRole: iam.Role, logGroup: logs.LogGroup): ecs.TaskDefinition | undefined {
+    if (!props.enableNonRootContainer && !props.enableReadOnlyRootFilesystem) {
+      return undefined; // Use default task definition
+    }
+
+    // Create custom task definition with security enhancements
+    const taskDefinition = new ecs.FargateTaskDefinition(this, 'SecureTaskDefinition', {
+      cpu: props.cpu,
+      memoryLimitMiB: props.memoryLimitMiB,
+      executionRole,
+      taskRole,
+    });
+
+    // Add container with security enhancements
+    const container = taskDefinition.addContainer('testapp', {
+      image: ecs.ContainerImage.fromEcrRepository(this.repository, 'latest'),
+      logging: ecs.LogDrivers.awsLogs({
+        streamPrefix: 'testapp',
+        logGroup,
+      }),
+      environment: {
+        REQUIRED_SETTING: props.environment,
+        ENVIRONMENT: props.environment,
+        AWS_DEFAULT_REGION: this.region,
+      },
+      secrets: {
+        SECRET_KEY: ecs.Secret.fromSecretsManager(this.appSecrets, 'application.secret_key'),
+      },
+      // Security enhancements
+      user: props.enableNonRootContainer ? '1001:1001' : undefined, // Non-root user
+      readonlyRootFilesystem: props.enableReadOnlyRootFilesystem || false,
+      // Resource limits for security
+      memoryReservationMiB: Math.floor(props.memoryLimitMiB * 0.8), // Reserve 80% of memory
+    });
+
+    // Add port mapping
+    container.addPortMappings({
+      containerPort: 8000,
+      protocol: ecs.Protocol.TCP,
+    });
+
+    // Add tmpfs mounts if read-only root filesystem is enabled
+    if (props.enableReadOnlyRootFilesystem) {
+      taskDefinition.addVolume({
+        name: 'tmp-volume',
+        host: {},
+      });
+
+      container.addMountPoints({
+        sourceVolume: 'tmp-volume',
+        containerPath: '/tmp',
+        readOnly: false,
+      });
+
+      // Add logs volume
+      taskDefinition.addVolume({
+        name: 'logs-volume',
+        host: {},
+      });
+
+      container.addMountPoints({
+        sourceVolume: 'logs-volume',
+        containerPath: '/app/logs',
+        readOnly: false,
+      });
+    }
+
+    return taskDefinition;
+  }
+
   private createFargateService(props: TestAppInfrastructureStackProps): ecs_patterns.ApplicationLoadBalancedFargateService {
     // Create CloudWatch Log Group
     const logGroup = new logs.LogGroup(this, 'TestAppLogGroup', {
@@ -264,13 +369,32 @@ export class TestAppInfrastructureStack extends cdk.Stack {
       },
     });
 
-    const fargateService = new ecs_patterns.ApplicationLoadBalancedFargateService(this, 'TestAppService', {
+    // Create secure task definition if security enhancements are enabled
+    const secureTaskDefinition = this.createSecureTaskDefinition(props, executionRole, taskRole, logGroup);
+
+    const fargateServiceProps: any = {
       cluster: this.cluster,
       serviceName: `testapp-service-${props.environment}`,
-      cpu: props.cpu,
-      memoryLimitMiB: props.memoryLimitMiB,
       desiredCount: props.desiredCount,
-      taskImageOptions: {
+      publicLoadBalancer: true,
+      listenerPort: props.enableHTTPS ? 443 : 80,
+      protocol: props.enableHTTPS 
+        ? elasticloadbalancingv2.ApplicationProtocol.HTTPS 
+        : elasticloadbalancingv2.ApplicationProtocol.HTTP,
+      certificate: this.certificate,
+      domainZone: undefined, // Custom domain zone would be configured separately
+      domainName: undefined, // Domain name requires domainZone configuration
+      redirectHTTP: props.enableHTTPS, // Redirect HTTP to HTTPS when HTTPS is enabled
+      assignPublicIp: true,
+    };
+
+    // Use secure task definition if available, otherwise use standard taskImageOptions
+    if (secureTaskDefinition) {
+      fargateServiceProps.taskDefinition = secureTaskDefinition;
+    } else {
+      fargateServiceProps.cpu = props.cpu;
+      fargateServiceProps.memoryLimitMiB = props.memoryLimitMiB;
+      fargateServiceProps.taskImageOptions = {
         image: ecs.ContainerImage.fromEcrRepository(this.repository, 'latest'),
         containerName: 'testapp',
         containerPort: 8000,
@@ -289,15 +413,10 @@ export class TestAppInfrastructureStack extends cdk.Stack {
           // Individual secrets from AWS Secrets Manager
           SECRET_KEY: ecs.Secret.fromSecretsManager(this.appSecrets, 'application.secret_key'),
         },
-      },
-      publicLoadBalancer: true,
-      listenerPort: 80,
-      protocol: elasticloadbalancingv2.ApplicationProtocol.HTTP,
-      domainZone: undefined, // No custom domain for this assessment
-      domainName: undefined,
-      redirectHTTP: false,
-      assignPublicIp: true,
-    });
+      };
+    }
+
+    const fargateService = new ecs_patterns.ApplicationLoadBalancedFargateService(this, 'TestAppService', fargateServiceProps);
 
     // Configure health check
     fargateService.targetGroup.configureHealthCheck({
@@ -349,6 +468,178 @@ export class TestAppInfrastructureStack extends cdk.Stack {
     return fargateService;
   }
 
+  private createVPCFlowLogsBucket(props: TestAppInfrastructureStackProps): s3.Bucket {
+    const bucket = new s3.Bucket(this, 'VPCFlowLogsBucket', {
+      bucketName: `testapp-vpc-flow-logs-${props.environment}-${this.account}`,
+      encryption: s3.BucketEncryption.S3_MANAGED,
+      blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
+      versioned: false,
+      lifecycleRules: [
+        {
+          id: 'DeleteOldFlowLogs',
+          enabled: true,
+          expiration: cdk.Duration.days(props.environment === 'production' ? 90 : 30),
+        },
+      ],
+      removalPolicy: props.environment === 'production' 
+        ? cdk.RemovalPolicy.RETAIN 
+        : cdk.RemovalPolicy.DESTROY,
+    });
+
+    // Tag the bucket
+    cdk.Tags.of(bucket).add('Purpose', 'VPC-Flow-Logs');
+    cdk.Tags.of(bucket).add('Environment', props.environment);
+    
+    return bucket;
+  }
+
+  private createVPCFlowLogs(props: TestAppInfrastructureStackProps): void {
+    if (!this.flowLogsBucket) return;
+
+    // Create VPC Flow Logs
+    new ec2.FlowLog(this, 'VPCFlowLog', {
+      resourceType: ec2.FlowLogResourceType.fromVpc(this.vpc),
+      destination: ec2.FlowLogDestination.toS3(this.flowLogsBucket, 'vpc-flow-logs/'),
+      trafficType: ec2.FlowLogTrafficType.ALL,
+    });
+
+    // Create Flow Log for individual subnets (more granular)
+    this.vpc.privateSubnets.forEach((subnet, index) => {
+      new ec2.FlowLog(this, `PrivateSubnetFlowLog${index}`, {
+        resourceType: ec2.FlowLogResourceType.fromSubnet(subnet),
+        destination: ec2.FlowLogDestination.toS3(this.flowLogsBucket!, `private-subnets/subnet-${index}/`),
+        trafficType: ec2.FlowLogTrafficType.ALL,
+      });
+    });
+  }
+
+  private createCertificate(props: TestAppInfrastructureStackProps): certificatemanager.ICertificate {
+    if (!props.domainName) {
+      throw new Error('Domain name is required when HTTPS is enabled');
+    }
+
+    // Create SSL certificate
+    return new certificatemanager.Certificate(this, 'SSLCertificate', {
+      domainName: props.domainName,
+      subjectAlternativeNames: [`*.${props.domainName}`],
+      validation: certificatemanager.CertificateValidation.fromDns(),
+    });
+  }
+
+  private createWAF(props: TestAppInfrastructureStackProps): wafv2.CfnWebACL {
+    // Create IP sets for rate limiting and blocking
+    const ipSetAllowList = new wafv2.CfnIPSet(this, 'IPSetAllowList', {
+      name: `testapp-${props.environment}-allow-list`,
+      description: 'Allowed IP addresses',
+      ipAddressVersion: 'IPV4',
+      addresses: [], // Add your allowed IPs here
+      scope: 'REGIONAL',
+    });
+
+    // Create WAF Web ACL
+    const webACL = new wafv2.CfnWebACL(this, 'WebACL', {
+      name: `testapp-${props.environment}-web-acl`,
+      description: `WAF for TestApp ${props.environment} environment`,
+      scope: 'REGIONAL',
+      defaultAction: { allow: {} },
+      
+      rules: [
+        // AWS Managed Rule Set - Core Rule Set
+        {
+          name: 'AWS-AWSManagedRulesCommonRuleSet',
+          priority: 1,
+          overrideAction: { none: {} },
+          visibilityConfig: {
+            sampledRequestsEnabled: true,
+            cloudWatchMetricsEnabled: true,
+            metricName: 'CommonRuleSetMetric',
+          },
+          statement: {
+            managedRuleGroupStatement: {
+              vendorName: 'AWS',
+              name: 'AWSManagedRulesCommonRuleSet',
+            },
+          },
+        },
+        
+        // AWS Managed Rule Set - Known Bad Inputs
+        {
+          name: 'AWS-AWSManagedRulesKnownBadInputsRuleSet',
+          priority: 2,
+          overrideAction: { none: {} },
+          visibilityConfig: {
+            sampledRequestsEnabled: true,
+            cloudWatchMetricsEnabled: true,
+            metricName: 'KnownBadInputsRuleSetMetric',
+          },
+          statement: {
+            managedRuleGroupStatement: {
+              vendorName: 'AWS',
+              name: 'AWSManagedRulesKnownBadInputsRuleSet',
+            },
+          },
+        },
+
+        // Rate limiting rule
+        {
+          name: 'RateLimitRule',
+          priority: 3,
+          action: { block: {} },
+          visibilityConfig: {
+            sampledRequestsEnabled: true,
+            cloudWatchMetricsEnabled: true,
+            metricName: 'RateLimitRuleMetric',
+          },
+          statement: {
+            rateBasedStatement: {
+              limit: props.environment === 'production' ? 2000 : 1000,
+              aggregateKeyType: 'IP',
+            },
+          },
+        },
+
+        // Geographic restriction (optional - can be configured per environment)
+        ...(props.environment === 'production' ? [{
+          name: 'GeoRestrictionRule',
+          priority: 4,
+          action: { block: {} },
+          visibilityConfig: {
+            sampledRequestsEnabled: true,
+            cloudWatchMetricsEnabled: true,
+            metricName: 'GeoRestrictionRuleMetric',
+          },
+          statement: {
+            geoMatchStatement: {
+              countryCodes: ['CN', 'RU', 'KP'], // Block specific countries
+            },
+          },
+        }] : []),
+      ],
+
+      visibilityConfig: {
+        sampledRequestsEnabled: true,
+        cloudWatchMetricsEnabled: true,
+        metricName: `testapp-${props.environment}-web-acl`,
+      },
+    });
+
+    // Tag the Web ACL
+    cdk.Tags.of(webACL).add('Environment', props.environment);
+    cdk.Tags.of(webACL).add('Purpose', 'DDoS-Protection');
+
+    return webACL;
+  }
+
+  private associateWAFWithALB(): void {
+    if (!this.webACL) return;
+
+    // Associate WAF with Application Load Balancer
+    new wafv2.CfnWebACLAssociation(this, 'WebACLAssociation', {
+      resourceArn: this.fargateService.loadBalancer.loadBalancerArn,
+      webAclArn: this.webACL.attrArn,
+    });
+  }
+
   private createOutputs(): void {
     new cdk.CfnOutput(this, 'VpcId', {
       value: this.vpc.vpcId,
@@ -380,9 +671,35 @@ export class TestAppInfrastructureStack extends cdk.Stack {
       exportName: `${this.stackName}-ServiceName`,
     });
 
+    const protocol = this.certificate ? 'https' : 'http';
     new cdk.CfnOutput(this, 'ApplicationUrl', {
-      value: `http://${this.fargateService.loadBalancer.loadBalancerDnsName}`,
+      value: `${protocol}://${this.fargateService.loadBalancer.loadBalancerDnsName}`,
       description: 'Application URL',
     });
+
+    // Security-related outputs (if enabled)
+    if (this.webACL) {
+      new cdk.CfnOutput(this, 'WAFWebACLArn', {
+        value: this.webACL.attrArn,
+        description: 'WAF Web ACL ARN',
+        exportName: `${this.stackName}-WAFWebACLArn`,
+      });
+    }
+
+    if (this.flowLogsBucket) {
+      new cdk.CfnOutput(this, 'FlowLogsBucketName', {
+        value: this.flowLogsBucket.bucketName,
+        description: 'VPC Flow Logs S3 Bucket Name',
+        exportName: `${this.stackName}-FlowLogsBucketName`,
+      });
+    }
+
+    if (this.certificate) {
+      new cdk.CfnOutput(this, 'CertificateArn', {
+        value: this.certificate.certificateArn,
+        description: 'SSL Certificate ARN',
+        exportName: `${this.stackName}-CertificateArn`,
+      });
+    }
   }
 }

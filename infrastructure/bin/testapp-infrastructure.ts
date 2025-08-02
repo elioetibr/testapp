@@ -23,6 +23,14 @@ const config = {
     publicSubnetCidrMask: 24,  // /24 = 254 IPs per subnet
     privateSubnetCidrMask: 24,
     // IPv6 not configured for dev
+    // Security enhancements (disabled by default)
+    enableWAF: false,
+    enableVPCFlowLogs: false,
+    enableHTTPS: false,
+    domainName: undefined, // Set to your domain name when enabling HTTPS
+    // Container security (disabled by default)
+    enableNonRootContainer: false,
+    enableReadOnlyRootFilesystem: false,
   },
   production: {
     enableIPv6: true,
@@ -38,6 +46,14 @@ const config = {
     privateSubnetCidrMask: 22,  // /22 = 1022 IPs per subnet for maximum scalability
     // IPv6 will use Amazon-provided block
     // To use custom IPv6: ipv6CidrBlock: '2001:0db8::/56'
+    // Security enhancements (disabled by default - enable as needed)
+    enableWAF: false, // Set to true to enable WAF protection
+    enableVPCFlowLogs: false, // Set to true to enable VPC flow logs
+    enableHTTPS: false, // Set to true to enable HTTPS/TLS
+    domainName: undefined, // Set to your domain name when enabling HTTPS: 'example.com'
+    // Container security (disabled by default - enable as needed)
+    enableNonRootContainer: false, // Set to true for non-root container security
+    enableReadOnlyRootFilesystem: false, // Set to true for read-only root filesystem
   }
 };
 

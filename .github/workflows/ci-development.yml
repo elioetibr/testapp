@@ -3,10 +3,36 @@ name: CI Development Workflow
 on:
   push:
     branches: [ main, master, develop ]
+    paths-ignore:
+      - '*.md'
+      - '**/*.md'
+      - 'docs/**'
+      - 'README*'
+      - 'CHANGELOG*'
+      - 'LICENSE*'
+      - 'SECURITY.md'
+      - 'ASSESSMENT.md'
+      - 'SOPS_WRAPPER_README.md'
+      - '.gitignore'
+      - '.gitleaks.toml'
+      - 'DevOps Assessment CDK.txt'
   pull_request:
     branches: [ main, master ]
+    paths-ignore:
+      - '*.md'
+      - '**/*.md'
+      - 'docs/**'
+      - 'README*'
+      - 'CHANGELOG*'
+      - 'LICENSE*'
+      - 'SECURITY.md'
+      - 'ASSESSMENT.md'
+      - 'SOPS_WRAPPER_README.md'
+      - '.gitignore'
+      - '.gitleaks.toml'
+      - 'DevOps Assessment CDK.txt'
   schedule:
-    # Run daily security scans at 2 AM UTC
+    # Run daily security scans at 2 AM UTC (ignores paths-ignore)
     - cron: '0 2 * * *'
 
 env:
@@ -20,6 +46,7 @@ permissions:
   actions: read
   checks: write
   pull-requests: write
+  id-token: write  # For AWS OIDC
 
 jobs:
   secret-scan:
@@ -407,10 +434,52 @@ jobs:
           verbose: true
         continue-on-error: true
 
+  infrastructure-test:
+    name: Test Infrastructure Code
+    runs-on: ${{ vars.RUNS_ON }}
+    if: ${{ !contains(github.event.head_commit.message, '[skip ci]') && !contains(github.event.head_commit.message, '[ci skip]') }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: 'npm'
+          cache-dependency-path: infrastructure/package-lock.json
+
+      - name: Install infrastructure dependencies
+        run: |
+          cd infrastructure
+          npm ci
+
+      - name: Build TypeScript
+        run: |
+          cd infrastructure
+          npm run build
+
+      - name: Run infrastructure tests
+        run: |
+          cd infrastructure
+          npm test
+
+      - name: Synthesize CloudFormation
+        run: |
+          cd infrastructure
+          npm run synth
+
+      - name: Upload CloudFormation templates
+        uses: actions/upload-artifact@v4
+        with:
+          name: cloudformation-templates
+          path: infrastructure/cdk.out/*.template.json
+          retention-days: 30
+
   build:
     name: Build and Push Docker Image
     runs-on: ${{ vars.RUNS_ON }}
-    needs: [secret-scan, dependency-scan, sast-scan, container-scan, license-scan, tests]
+    needs: [secret-scan, dependency-scan, sast-scan, container-scan, license-scan, tests, infrastructure-test]
     if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master' || github.event_name == 'workflow_dispatch'
     concurrency:
       group: build-${{ github.ref }}
@@ -708,4 +777,286 @@ jobs:
           then
             gh release list | grep Draft | awk '{print $1 " \t"}' | while read -r draft; do echo "Removing Draft Releases: ${draft}"; gh release delete --yes "${draft}"; done
             gh release create v${{ steps.gitversion.outputs.semVer }} --generate-notes --verify-tag --latest
+          fi
+
+  deploy-infrastructure:
+    name: Deploy Infrastructure
+    runs-on: ${{ vars.RUNS_ON }}
+    needs: [build, infrastructure-test]
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    environment: 
+      name: development
+      url: ${{ steps.deploy.outputs.application_url }}
+    
+    permissions:
+      id-token: write
+      contents: read
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOYMENT_ROLE }}
+          role-session-name: GitHubActions-Infrastructure
+          aws-region: ${{ vars.AWS_DEFAULT_REGION }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: 'npm'
+          cache-dependency-path: infrastructure/package-lock.json
+
+      - name: Install AWS CDK
+        run: npm install -g aws-cdk@latest
+
+      - name: Install infrastructure dependencies
+        run: |
+          cd infrastructure
+          npm ci
+
+      - name: Build infrastructure
+        run: |
+          cd infrastructure
+          npm run build
+
+      - name: Download CloudFormation templates
+        uses: actions/download-artifact@v4
+        with:
+          name: cloudformation-templates
+          path: infrastructure/cdk.out/
+
+      - name: Deploy infrastructure
+        id: deploy
+        run: |
+          cd infrastructure
+          
+          # Deploy development stack
+          cdk deploy TestApp-dev --require-approval never --outputs-file outputs.json
+          
+          # Extract application URL from outputs
+          APPLICATION_URL=$(jq -r '.["TestApp-dev"]["ApplicationUrl"] // empty' outputs.json)
+          if [[ -n "$APPLICATION_URL" ]]; then
+            echo "application_url=$APPLICATION_URL" >> $GITHUB_OUTPUT
+          fi
+          
+          # Display deployment summary
+          echo "## 🚀 Infrastructure Deployment Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Resource | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|----------|-------|" >> $GITHUB_STEP_SUMMARY
+          
+          if [[ -f outputs.json ]]; then
+            jq -r '.["TestApp-dev"] | to_entries[] | "| \(.key) | \(.value) |"' outputs.json >> $GITHUB_STEP_SUMMARY
+          fi
+
+      - name: Run infrastructure smoke tests
+        run: |
+          # Wait for service to be healthy
+          if [[ -n "${{ steps.deploy.outputs.application_url }}" ]]; then
+            echo "Running smoke tests against: ${{ steps.deploy.outputs.application_url }}"
+            
+            # Wait up to 5 minutes for the service to be ready
+            timeout 300 bash -c '
+              until curl -sf "${{ steps.deploy.outputs.application_url }}/health/" > /dev/null; do
+                echo "Waiting for service to be ready..."
+                sleep 10
+              done
+              echo "Service is ready!"
+            '
+            
+            # Test the application endpoints
+            curl -f "${{ steps.deploy.outputs.application_url }}/" 
+            curl -f "${{ steps.deploy.outputs.application_url }}/health/"
+            
+            echo "✅ Infrastructure smoke tests passed"
+          else
+            echo "⚠️ No application URL found, skipping smoke tests"
+          fi
+
+  # Manual approval for production deployments
+  production-approval:
+    name: 'Production Deployment Approval'
+    runs-on: ${{ vars.RUNS_ON }}
+    needs: [deploy-infrastructure]
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push' && contains(github.event.head_commit.message, '[deploy-prod]')
+    environment:
+      name: production-approval
+    
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: write
+    
+    steps:
+      - name: Generate GitHub App Token
+        uses: actions/create-github-app-token@v2
+        id: app-token
+        with:
+          app-id: ${{ vars.APP_ID }}
+          private-key: ${{ secrets.PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          token: ${{ steps.app-token.outputs.token }}
+
+      - name: Download Infrastructure Templates
+        uses: actions/download-artifact@v4
+        with:
+          name: cloudformation-templates
+          path: infrastructure/cdk.out/
+
+      - name: Create Deployment Summary
+        run: |
+          echo "## 🚨 Production Deployment Approval Required" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Operation:** Infrastructure Deployment" >> $GITHUB_STEP_SUMMARY
+          echo "**Environment:** production" >> $GITHUB_STEP_SUMMARY
+          echo "**Commit:** ${{ github.sha }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Author:** ${{ github.actor }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          echo "### 📋 Deployment Details" >> $GITHUB_STEP_SUMMARY
+          echo "- **Repository:** ${{ github.repository }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Branch:** ${{ github.ref_name }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Workflow:** ${{ github.workflow }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Run ID:** ${{ github.run_id }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          echo "### 🏗️ Infrastructure Changes" >> $GITHUB_STEP_SUMMARY
+          if [ -d "infrastructure/cdk.out" ]; then
+            echo "- CDK Templates: $(find infrastructure/cdk.out -name "*.template.json" | wc -l) files" >> $GITHUB_STEP_SUMMARY
+            echo "- Stack Name: TestApp-production" >> $GITHUB_STEP_SUMMARY
+            echo "- AWS Region: ${{ vars.AWS_DEFAULT_REGION || 'us-east-1' }}" >> $GITHUB_STEP_SUMMARY
+          fi
+
+      - name: Manual Approval Required
+        uses: trstringer/manual-approval@v1
+        with:
+          secret: ${{ steps.app-token.outputs.token }}
+          approvers: ${{ vars.PRODUCTION_APPROVERS || github.repository_owner }}
+          minimum-approvals: 1
+          issue-title: "🚨 Production Infrastructure Deployment Approval Required"
+          issue-body: |
+            ## 🚀 Production Infrastructure Deployment Approval
+
+            **Environment:** production
+            **Operation:** CDK Infrastructure Deployment  
+            **Stack:** TestApp-production
+            **Commit:** ${{ github.sha }}
+            **Author:** ${{ github.actor }}
+
+            ### ⚠️ Important Security Notice
+            This operation will deploy infrastructure changes to the **PRODUCTION** environment. 
+            
+            **Review Required:** Please carefully review all changes before approving this deployment.
+
+            ### 🔗 Review Links
+            - **Workflow Run:** https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
+            - **Infrastructure Code:** https://github.com/${{ github.repository }}/tree/${{ github.sha }}/infrastructure
+            - **Commit Details:** https://github.com/${{ github.repository }}/commit/${{ github.sha }}
+            - **CloudFormation Templates:** Available in workflow artifacts
+
+            ### 📋 Pre-Deployment Checklist
+            - [ ] Reviewed infrastructure code changes in this commit
+            - [ ] Verified security configurations are appropriate
+            - [ ] Confirmed resource sizing and costs are acceptable  
+            - [ ] Validated deployment will not cause service disruption
+            - [ ] Ensured rollback plan is available if needed
+
+            ### 🔧 Infrastructure Components
+            - **ECS Fargate Service** with auto-scaling
+            - **Application Load Balancer** with health checks
+            - **VPC with private/public subnets** and security groups
+            - **ECR Repository** for container images
+            - **CloudWatch Logs** for monitoring
+            - **AWS Secrets Manager** for application secrets
+            - **Optional Security Features** (WAF, VPC Flow Logs, HTTPS/TLS)
+
+            ### ✅ Approval Instructions
+            **Approvers:** ${{ vars.PRODUCTION_APPROVERS || github.repository_owner }}
+            
+            To approve this deployment, please:
+            1. Review the infrastructure changes
+            2. Verify the deployment checklist above
+            3. Comment "approved" or "approve" on this issue
+
+            > **Security Policy:** This approval is required for all production infrastructure deployments.
+
+            ### 🛑 Emergency Contact
+            If this is an emergency deployment, please contact the on-call team and include justification in your approval comment.
+          exclude-workflow-initiator-as-approver: false
+
+  deploy-production:
+    name: Deploy to Production
+    runs-on: ${{ vars.RUNS_ON }}
+    needs: [deploy-infrastructure, production-approval]
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push' && contains(github.event.head_commit.message, '[deploy-prod]')
+    environment: 
+      name: production
+      url: ${{ steps.deploy-prod.outputs.application_url }}
+    
+    permissions:
+      id-token: write
+      contents: read
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials for production
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_PRODUCTION_ROLE }}
+          role-session-name: GitHubActions-Production
+          aws-region: ${{ vars.AWS_DEFAULT_REGION }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: 'npm'
+          cache-dependency-path: infrastructure/package-lock.json
+
+      - name: Install AWS CDK
+        run: npm install -g aws-cdk@latest
+
+      - name: Install infrastructure dependencies
+        run: |
+          cd infrastructure
+          npm ci
+
+      - name: Build infrastructure
+        run: |
+          cd infrastructure
+          npm run build
+
+      - name: Deploy production infrastructure
+        id: deploy-prod
+        run: |
+          cd infrastructure
+          
+          # Deploy production stack
+          cdk deploy TestApp-production --require-approval never --outputs-file outputs-prod.json
+          
+          # Extract application URL from outputs
+          APPLICATION_URL=$(jq -r '.["TestApp-production"]["ApplicationUrl"] // empty' outputs-prod.json)
+          if [[ -n "$APPLICATION_URL" ]]; then
+            echo "application_url=$APPLICATION_URL" >> $GITHUB_OUTPUT
+          fi
+          
+          # Display deployment summary
+          echo "## 🎯 Production Deployment Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Resource | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|----------|-------|" >> $GITHUB_STEP_SUMMARY
+          
+          if [[ -f outputs-prod.json ]]; then
+            jq -r '.["TestApp-production"] | to_entries[] | "| \(.key) | \(.value) |"' outputs-prod.json >> $GITHUB_STEP_SUMMARY
           fi

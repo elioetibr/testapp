@@ -17,6 +17,12 @@ export interface TestAppInfrastructureStackProps extends cdk.StackProps {
     publicSubnetCidrMask?: number;
     privateSubnetCidrMask?: number;
     ipv6CidrBlock?: string;
+    enableWAF?: boolean;
+    enableVPCFlowLogs?: boolean;
+    enableHTTPS?: boolean;
+    domainName?: string;
+    enableNonRootContainer?: boolean;
+    enableReadOnlyRootFilesystem?: boolean;
 }
 export declare class TestAppInfrastructureStack extends cdk.Stack {
     readonly vpc: ec2.Vpc;
@@ -25,11 +31,20 @@ export declare class TestAppInfrastructureStack extends cdk.Stack {
     readonly fargateService: ecs_patterns.ApplicationLoadBalancedFargateService;
     private readonly secretsLoader;
     private readonly appSecrets;
+    private readonly flowLogsBucket?;
+    private readonly webACL?;
+    private readonly certificate?;
     constructor(scope: Construct, id: string, props: TestAppInfrastructureStackProps);
     private createSecretsManagerSecret;
     private createVpc;
     private createEcrRepository;
     private createEcsCluster;
+    private createSecureTaskDefinition;
     private createFargateService;
+    private createVPCFlowLogsBucket;
+    private createVPCFlowLogs;
+    private createCertificate;
+    private createWAF;
+    private associateWAFWithALB;
     private createOutputs;
 }
