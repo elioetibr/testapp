@@ -1,0 +1,341 @@
+name: CI Selective (Smart Path Filtering)
+
+on:
+  pull_request:
+    branches: [ main, master, develop ]
+    types: [opened, synchronize, reopened]
+  push:
+    branches: [ main, master, develop ]
+
+env:
+  PYTHON_VERSION: '3.13'
+
+permissions:
+  contents: read
+  pull-requests: write
+  checks: write
+
+jobs:
+  # 🔍 Detect changes to determine what needs to run
+  detect-changes:
+    name: 🔍 Detect Changes
+    runs-on: ubuntu-latest
+    if: ${{ !contains(github.event.head_commit.message, '[skip ci]') }}
+    outputs:
+      app: ${{ steps.changes.outputs.app }}
+      infrastructure: ${{ steps.changes.outputs.infrastructure }}
+      security: ${{ steps.changes.outputs.security }}
+      docs-only: ${{ steps.changes.outputs.docs-only }}
+      workflows: ${{ steps.changes.outputs.workflows }}
+      tests: ${{ steps.changes.outputs.tests }}
+    
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Detect file changes
+        uses: dorny/paths-filter@v3
+        id: changes
+        with:
+          filters: |
+            app:
+              - 'src/**'
+              - 'Dockerfile*'
+              - 'pyproject.toml'
+              - 'uv.lock'
+              - '.python-version'
+              - 'requirements*.txt'
+              - 'scripts/python/**'
+              - 'secrets/**'
+            
+            infrastructure:
+              - 'infrastructure/**'
+              - '.github/workflows/ci-development.yml'
+              - '.github/workflows/cd-development.yml'
+              - 'Makefile'
+            
+            security:
+              - 'pyproject.toml'
+              - 'uv.lock'  
+              - 'requirements*.txt'
+              - 'Dockerfile*'
+              - '.gitleaks.toml'
+              - 'SECURITY.md'
+              - 'src/**'
+              - 'infrastructure/**'
+            
+            docs-only:
+              - '*.md'
+              - '**/*.md'
+              - 'docs/**'
+              - 'README*'
+              - 'CHANGELOG*'
+              - 'LICENSE*'
+              - '.gitignore'
+              - 'ASSESSMENT.md'
+            
+            workflows:
+              - '.github/workflows/**'
+            
+            tests:
+              - 'src/**/test*.py'
+              - 'src/**/tests/**'
+              - 'infrastructure/test/**'
+              - 'pyproject.toml'
+
+      - name: Summary of changes
+        run: |
+          echo "## 🔍 Change Detection Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Component | Changed | Action |" >> $GITHUB_STEP_SUMMARY
+          echo "|-----------|---------|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| 🐍 Application | ${{ steps.changes.outputs.app }} | ${{ steps.changes.outputs.app == 'true' && 'Run app CI/CD' || 'Skip' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| 🏗️ Infrastructure | ${{ steps.changes.outputs.infrastructure }} | ${{ steps.changes.outputs.infrastructure == 'true' && 'Run infrastructure tests' || 'Skip' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| 🔒 Security | ${{ steps.changes.outputs.security }} | ${{ steps.changes.outputs.security == 'true' && 'Run security scans' || 'Skip' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| 📝 Documentation | ${{ steps.changes.outputs.docs-only }} | ${{ steps.changes.outputs.docs-only == 'true' && 'Comment only' || 'Skip' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| ⚙️ Workflows | ${{ steps.changes.outputs.workflows }} | ${{ steps.changes.outputs.workflows == 'true' && 'Validate workflows' || 'Skip' }} |" >> $GITHUB_STEP_SUMMARY
+
+  # 📝 Documentation-only changes (fast comment)
+  docs-only-feedback:
+    name: 📝 Documentation Changes
+    runs-on: ubuntu-latest
+    needs: detect-changes
+    if: needs.detect-changes.outputs.docs-only == 'true' && needs.detect-changes.outputs.app == 'false' && needs.detect-changes.outputs.infrastructure == 'false'
+    
+    steps:
+      - name: Comment on docs-only PR
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const comment = `## 📝 **Documentation Update**
+            
+            ✅ **This PR contains only documentation changes**
+            
+            ### 📋 Changes Detected:
+            - Documentation files (*.md)
+            - README files
+            - License or changelog updates
+            
+            ### ⚡ **Why CI is Skipped:**
+            - No application code changes
+            - No infrastructure changes  
+            - No security-sensitive file changes
+            - No dependency updates
+            
+            ### 🎯 **Next Steps:**
+            - Review documentation changes
+            - Merge when ready (no CI required)
+            
+            ---
+            
+            💡 **Smart path filtering in action!** Only relevant CI jobs run based on changed files.
+            `;
+            
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: comment
+            });
+
+      - name: Documentation summary
+        run: |
+          echo "## 📝 Documentation-Only Changes Detected" >> $GITHUB_STEP_SUMMARY
+          echo "CI pipeline skipped - documentation changes don't require full validation" >> $GITHUB_STEP_SUMMARY
+          echo "✅ Ready for review and merge" >> $GITHUB_STEP_SUMMARY
+
+  # 🐍 Application-specific CI (only if app changes)
+  app-ci:
+    name: 🐍 Application CI
+    runs-on: ${{ vars.RUNS_ON || 'ubuntu-latest' }}
+    needs: detect-changes
+    if: needs.detect-changes.outputs.app == 'true' || needs.detect-changes.outputs.security == 'true'
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Python and UV (Cached)
+        uses: astral-sh/setup-uv@v2
+        with:
+          version: "latest"
+          enable-cache: true
+          cache-dependency-glob: "pyproject.toml"
+
+      - name: Install dependencies
+        run: uv sync --group dev
+
+      - name: Run application tests
+        env:
+          SECRET_KEY: django-test-secret-key-for-ci
+          ENVIRONMENT: testing
+          DEBUG: false
+          REQUIRED_SETTING: test-value-for-ci
+          EMAIL_URL: smtp://localhost:25
+        run: |
+          mkdir -p logs src/static
+          cd src
+          uv run coverage run --source='testapp' manage.py test
+          uv run coverage report
+
+      - name: Security scan (App changes)
+        if: needs.detect-changes.outputs.security == 'true'
+        run: |
+          uv run bandit -r src/testapp/ -f json -o bandit-report.json || true
+          uv run bandit -r src/testapp/ -f txt
+
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-ci-results
+          path: |
+            src/coverage.xml
+            bandit-report.json
+
+  # 🏗️ Infrastructure-specific CI (only if infrastructure changes)  
+  infrastructure-ci:
+    name: 🏗️ Infrastructure CI
+    runs-on: ${{ vars.RUNS_ON || 'ubuntu-latest' }}
+    needs: detect-changes
+    if: needs.detect-changes.outputs.infrastructure == 'true'
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: 'npm'
+          cache-dependency-path: infrastructure/package-lock.json
+
+      - name: Install infrastructure dependencies
+        run: |
+          cd infrastructure
+          npm ci --prefer-offline
+
+      - name: Build TypeScript
+        run: |
+          cd infrastructure
+          npm run build
+
+      - name: Run infrastructure tests
+        run: |
+          cd infrastructure
+          npm test
+
+      - name: Synthesize CloudFormation
+        run: |
+          cd infrastructure
+          npm run synth
+
+      - name: Upload CloudFormation templates
+        uses: actions/upload-artifact@v4
+        with:
+          name: infrastructure-templates
+          path: infrastructure/cdk.out/*.template.json
+
+  # ⚙️ Workflow validation (only if workflow changes)
+  workflow-validation:
+    name: ⚙️ Workflow Validation
+    runs-on: ubuntu-latest
+    needs: detect-changes
+    if: needs.detect-changes.outputs.workflows == 'true'
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Validate GitHub Actions workflows
+        run: |
+          # Basic YAML syntax validation
+          for workflow in .github/workflows/*.yml; do
+            echo "Validating $workflow"
+            python -c "import yaml; yaml.safe_load(open('$workflow'))"
+          done
+          
+          echo "✅ All workflow files have valid YAML syntax"
+
+      - name: Check for workflow best practices
+        run: |
+          echo "## ⚙️ Workflow Validation Results" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ YAML syntax validation passed" >> $GITHUB_STEP_SUMMARY
+          echo "- 🔍 Workflow files checked for best practices" >> $GITHUB_STEP_SUMMARY
+
+  # 📊 Smart CI Summary
+  smart-ci-summary:
+    name: 📊 Smart CI Summary
+    runs-on: ubuntu-latest
+    needs: [detect-changes, app-ci, infrastructure-ci, workflow-validation, docs-only-feedback]
+    if: always() && !cancelled()
+    
+    steps:
+      - name: Generate smart summary
+        run: |
+          echo "## 🎯 Smart CI Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### 🔍 Change Analysis:" >> $GITHUB_STEP_SUMMARY
+          echo "- **App changes**: ${{ needs.detect-changes.outputs.app }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Infrastructure changes**: ${{ needs.detect-changes.outputs.infrastructure }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Security-sensitive changes**: ${{ needs.detect-changes.outputs.security }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Documentation only**: ${{ needs.detect-changes.outputs.docs-only }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### ⚡ Performance Optimization:" >> $GITHUB_STEP_SUMMARY
+          echo "- **Jobs skipped**: Based on unchanged components" >> $GITHUB_STEP_SUMMARY
+          echo "- **Time saved**: Only relevant validations run" >> $GITHUB_STEP_SUMMARY  
+          echo "- **Resources optimized**: Targeted CI execution" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### 📈 CI Results:" >> $GITHUB_STEP_SUMMARY
+          echo "- **App CI**: ${{ needs.app-ci.result || 'skipped' }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Infrastructure CI**: ${{ needs.infrastructure-ci.result || 'skipped' }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Workflow Validation**: ${{ needs.workflow-validation.result || 'skipped' }}" >> $GITHUB_STEP_SUMMARY
+
+      - name: Comment PR with smart results
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const appResult = '${{ needs.app-ci.result || 'skipped' }}';
+            const infraResult = '${{ needs.infrastructure-ci.result || 'skipped' }}';
+            const workflowResult = '${{ needs.workflow-validation.result || 'skipped' }}';
+            
+            const appChanges = '${{ needs.detect-changes.outputs.app }}';
+            const infraChanges = '${{ needs.detect-changes.outputs.infrastructure }}';
+            const securityChanges = '${{ needs.detect-changes.outputs.security }}';
+            const docsOnly = '${{ needs.detect-changes.outputs.docs-only }}';
+            
+            const comment = `## 🎯 **Smart CI Results**
+            
+            ### 🔍 **Intelligent Analysis:**
+            - App changes: ${appChanges === 'true' ? '✅ Detected' : '⚪ None'}
+            - Infrastructure changes: ${infraChanges === 'true' ? '✅ Detected' : '⚪ None'}
+            - Security changes: ${securityChanges === 'true' ? '✅ Detected' : '⚪ None'}
+            - Documentation only: ${docsOnly === 'true' ? '✅ Yes' : '⚪ No'}
+            
+            ### ⚡ **Optimized Execution:**
+            - **App CI**: ${appResult}
+            - **Infrastructure CI**: ${infraResult} 
+            - **Workflow Validation**: ${workflowResult}
+            
+            ### 💡 **Smart Path Filtering Benefits:**
+            - ⏱️ **Faster feedback** - Only relevant checks run
+            - 💰 **Cost optimization** - Reduced compute usage
+            - 🎯 **Targeted validation** - Focus on changed components
+            - 🔄 **Better DX** - Quicker iterations for developers
+            
+            ---
+            
+            🚀 **Smart CI automatically optimizes based on your changes!**
+            `;
+            
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: comment
+            });

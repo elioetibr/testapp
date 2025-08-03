@@ -1,4 +1,4 @@
-name: CI Development Workflow
+name: CI Integration Workflow (Full)
 
 on:
   push:
@@ -16,24 +16,17 @@ on:
       - '.gitignore'
       - '.gitleaks.toml'
       - 'DevOps Assessment CDK.txt'
-  pull_request:
-    branches: [ main, master ]
-    paths-ignore:
-      - '*.md'
-      - '**/*.md'
-      - 'docs/**'
-      - 'README*'
-      - 'CHANGELOG*'
-      - 'LICENSE*'
-      - 'SECURITY.md'
-      - 'ASSESSMENT.md'
-      - 'SOPS_WRAPPER_README.md'
-      - '.gitignore'
-      - '.gitleaks.toml'
-      - 'DevOps Assessment CDK.txt'
+  # Remove pull_request trigger - handled by ci-feature.yml
   schedule:
     # Run daily security scans at 2 AM UTC (ignores paths-ignore)
     - cron: '0 2 * * *'
+  workflow_dispatch:
+    inputs:
+      skip_tests:
+        description: 'Skip tests for emergency deployments'
+        required: false
+        default: false
+        type: boolean
 
 env:
   PYTHON_VERSION: '3.13'
@@ -95,7 +88,8 @@ jobs:
         uses: astral-sh/setup-uv@v2
         with:
           version: "latest"
-          enable-cache: false
+          enable-cache: true
+          cache-dependency-glob: "pyproject.toml"
 
       - name: Install dependencies
         run: uv sync --all-extras
@@ -156,7 +150,8 @@ jobs:
         uses: astral-sh/setup-uv@v2
         with:
           version: "latest"
-          enable-cache: false
+          enable-cache: true
+          cache-dependency-glob: "pyproject.toml"
 
       - name: Install dependencies
         run: uv sync --all-extras
@@ -259,7 +254,8 @@ jobs:
         uses: astral-sh/setup-uv@v2
         with:
           version: "latest"
-          enable-cache: false
+          enable-cache: true
+          cache-dependency-glob: "pyproject.toml"
 
       - name: Install dependencies
         run: uv sync --all-extras

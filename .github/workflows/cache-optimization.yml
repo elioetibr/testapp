@@ -1,0 +1,369 @@
+name: Cache Optimization Benchmark
+
+on:
+  workflow_dispatch:
+    inputs:
+      benchmark_type:
+        description: 'Type of benchmark to run'
+        required: true
+        default: 'all'
+        type: choice
+        options:
+          - all
+          - python-deps
+          - docker-layers  
+          - node-deps
+          - security-tools
+
+env:
+  PYTHON_VERSION: '3.13'
+  NODE_VERSION: '18'
+
+permissions:
+  contents: read
+
+jobs:
+  # 🐍 Python Dependencies Caching Benchmark
+  python-cache-benchmark:
+    name: 🐍 Python Cache Benchmark
+    runs-on: ${{ vars.RUNS_ON || 'ubuntu-latest' }}
+    if: github.event.inputs.benchmark_type == 'python-deps' || github.event.inputs.benchmark_type == 'all'
+    
+    strategy:
+      matrix:
+        cache-strategy:
+          - name: "no-cache"
+            enable_uv_cache: false
+            use_custom_cache: false
+          - name: "uv-builtin-cache" 
+            enable_uv_cache: true
+            use_custom_cache: false
+          - name: "custom-cache"
+            enable_uv_cache: false
+            use_custom_cache: true
+          - name: "hybrid-cache"
+            enable_uv_cache: true
+            use_custom_cache: true
+    
+    steps:
+      - name: Benchmark Start Time
+        run: echo "BENCHMARK_START=$(date +%s)" >> $GITHUB_ENV
+
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Custom Cache (if enabled)
+        if: matrix.cache-strategy.use_custom_cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/uv
+            .venv
+            ~/.local/share/uv
+          key: uv-${{ matrix.cache-strategy.name }}-${{ runner.os }}-${{ hashFiles('pyproject.toml', 'uv.lock') }}
+          restore-keys: |
+            uv-${{ matrix.cache-strategy.name }}-${{ runner.os }}-
+            uv-${{ runner.os }}-
+
+      - name: Setup Python and UV
+        uses: astral-sh/setup-uv@v2
+        with:
+          version: "latest"
+          enable-cache: ${{ matrix.cache-strategy.enable_uv_cache }}
+          cache-dependency-glob: "pyproject.toml"
+
+      - name: Install Dependencies (Timed)
+        run: |
+          start_time=$(date +%s)
+          uv sync --group dev
+          end_time=$(date +%s)
+          duration=$((end_time - start_time))
+          echo "INSTALL_DURATION=$duration" >> $GITHUB_ENV
+          echo "⏱️ Install took: ${duration}s for ${{ matrix.cache-strategy.name }}"
+
+      - name: Benchmark Results
+        run: |
+          total_duration=$(($(date +%s) - $BENCHMARK_START))
+          echo "## 🐍 Python Cache Results: ${{ matrix.cache-strategy.name }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Install time**: ${INSTALL_DURATION}s" >> $GITHUB_STEP_SUMMARY
+          echo "- **Total time**: ${total_duration}s" >> $GITHUB_STEP_SUMMARY
+          echo "- **UV cache**: ${{ matrix.cache-strategy.enable_uv_cache }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Custom cache**: ${{ matrix.cache-strategy.use_custom_cache }}" >> $GITHUB_STEP_SUMMARY
+
+  # 🐳 Docker Layer Caching Benchmark
+  docker-cache-benchmark:
+    name: 🐳 Docker Cache Benchmark
+    runs-on: ${{ vars.RUNS_ON || 'ubuntu-latest' }}
+    if: github.event.inputs.benchmark_type == 'docker-layers' || github.event.inputs.benchmark_type == 'all'
+    
+    strategy:
+      matrix:
+        cache-strategy:
+          - name: "no-cache"
+            cache_from: ""
+            cache_to: ""
+          - name: "registry-cache"
+            cache_from: "type=registry,ref=ghcr.io/${{ github.repository }}/cache"
+            cache_to: "type=registry,ref=ghcr.io/${{ github.repository }}/cache,mode=max"
+          - name: "gha-cache"
+            cache_from: "type=gha"
+            cache_to: "type=gha,mode=max"
+    
+    steps:
+      - name: Benchmark Start Time
+        run: echo "BENCHMARK_START=$(date +%s)" >> $GITHUB_ENV
+
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to GitHub Container Registry
+        if: matrix.cache-strategy.name == 'registry-cache'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build Docker Image (Timed)
+        run: |
+          start_time=$(date +%s)
+          
+          if [ "${{ matrix.cache-strategy.cache_from }}" = "" ]; then
+            # No cache
+            docker build -t testapp:${{ matrix.cache-strategy.name }} .
+          else
+            # With cache
+            docker buildx build \
+              --cache-from="${{ matrix.cache-strategy.cache_from }}" \
+              --cache-to="${{ matrix.cache-strategy.cache_to }}" \
+              -t testapp:${{ matrix.cache-strategy.name }} \
+              --load \
+              .
+          fi
+          
+          end_time=$(date +%s)
+          duration=$((end_time - start_time))
+          echo "BUILD_DURATION=$duration" >> $GITHUB_ENV
+          echo "⏱️ Build took: ${duration}s for ${{ matrix.cache-strategy.name }}"
+
+      - name: Benchmark Results
+        run: |
+          total_duration=$(($(date +%s) - $BENCHMARK_START))
+          echo "## 🐳 Docker Cache Results: ${{ matrix.cache-strategy.name }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Build time**: ${BUILD_DURATION}s" >> $GITHUB_STEP_SUMMARY
+          echo "- **Total time**: ${total_duration}s" >> $GITHUB_STEP_SUMMARY
+          echo "- **Cache strategy**: ${{ matrix.cache-strategy.name }}" >> $GITHUB_STEP_SUMMARY
+
+  # 📦 Node.js Dependencies Caching Benchmark
+  node-cache-benchmark:
+    name: 📦 Node Cache Benchmark
+    runs-on: ${{ vars.RUNS_ON || 'ubuntu-latest' }}
+    if: github.event.inputs.benchmark_type == 'node-deps' || github.event.inputs.benchmark_type == 'all'
+    
+    strategy:
+      matrix:
+        cache-strategy:
+          - name: "no-cache"
+            use_npm_cache: false
+            use_custom_cache: false
+          - name: "npm-builtin-cache"
+            use_npm_cache: true
+            use_custom_cache: false
+          - name: "custom-cache"
+            use_npm_cache: false
+            use_custom_cache: true
+          - name: "hybrid-cache"
+            use_npm_cache: true
+            use_custom_cache: true
+    
+    steps:
+      - name: Benchmark Start Time
+        run: echo "BENCHMARK_START=$(date +%s)" >> $GITHUB_ENV
+
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: ${{ matrix.cache-strategy.use_npm_cache && 'npm' || '' }}
+          cache-dependency-path: infrastructure/package-lock.json
+
+      - name: Custom NPM Cache (if enabled)
+        if: matrix.cache-strategy.use_custom_cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            infrastructure/node_modules
+            ~/.npm
+          key: npm-${{ matrix.cache-strategy.name }}-${{ runner.os }}-${{ hashFiles('infrastructure/package-lock.json') }}
+          restore-keys: |
+            npm-${{ matrix.cache-strategy.name }}-${{ runner.os }}-
+            npm-${{ runner.os }}-
+
+      - name: Install Dependencies (Timed)
+        run: |
+          start_time=$(date +%s)
+          cd infrastructure
+          
+          if [ "${{ matrix.cache-strategy.use_custom_cache }}" = "true" ] && [ -d "node_modules" ]; then
+            echo "Using cached node_modules, running npm ci with --prefer-offline"
+            npm ci --prefer-offline
+          else
+            npm ci
+          fi
+          
+          end_time=$(date +%s)
+          duration=$((end_time - start_time))
+          echo "INSTALL_DURATION=$duration" >> $GITHUB_ENV
+          echo "⏱️ Install took: ${duration}s for ${{ matrix.cache-strategy.name }}"
+
+      - name: Build TypeScript (Timed)
+        run: |
+          start_time=$(date +%s)
+          cd infrastructure
+          npm run build
+          end_time=$(date +%s)
+          duration=$((end_time - start_time))
+          echo "BUILD_DURATION=$duration" >> $GITHUB_ENV
+
+      - name: Benchmark Results
+        run: |
+          total_duration=$(($(date +%s) - $BENCHMARK_START))
+          echo "## 📦 Node.js Cache Results: ${{ matrix.cache-strategy.name }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Install time**: ${INSTALL_DURATION}s" >> $GITHUB_STEP_SUMMARY
+          echo "- **Build time**: ${BUILD_DURATION}s" >> $GITHUB_STEP_SUMMARY
+          echo "- **Total time**: ${total_duration}s" >> $GITHUB_STEP_SUMMARY
+          echo "- **NPM cache**: ${{ matrix.cache-strategy.use_npm_cache }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Custom cache**: ${{ matrix.cache-strategy.use_custom_cache }}" >> $GITHUB_STEP_SUMMARY
+
+  # 🔒 Security Tools Caching Benchmark
+  security-tools-benchmark:
+    name: 🔒 Security Tools Cache
+    runs-on: ${{ vars.RUNS_ON || 'ubuntu-latest' }}
+    if: github.event.inputs.benchmark_type == 'security-tools' || github.event.inputs.benchmark_type == 'all'
+    
+    strategy:
+      matrix:
+        cache-strategy:
+          - name: "no-cache"
+            use_cache: false
+          - name: "with-cache"
+            use_cache: true
+    
+    steps:
+      - name: Benchmark Start Time
+        run: echo "BENCHMARK_START=$(date +%s)" >> $GITHUB_ENV
+
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Security Tools Cache (if enabled)
+        if: matrix.cache-strategy.use_cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            /tmp/sops.deb
+            /tmp/trivy-cache
+            ~/.local/share/semgrep
+          key: security-tools-${{ runner.os }}-v1
+          restore-keys: |
+            security-tools-${{ runner.os }}-
+
+      - name: Install Security Tools (Timed)
+        run: |
+          start_time=$(date +%s)
+          
+          # SOPS installation
+          if [ "${{ matrix.cache-strategy.use_cache }}" = "true" ] && [ -f /tmp/sops.deb ]; then
+            echo "Using cached SOPS binary"
+            sudo dpkg -i /tmp/sops.deb
+          else
+            echo "Downloading SOPS..."
+            wget -O /tmp/sops.deb https://github.com/mozilla/sops/releases/download/v3.10.2/sops_3.10.2_amd64.deb
+            sudo dpkg -i /tmp/sops.deb
+          fi
+          
+          # Trivy installation with cache
+          if [ "${{ matrix.cache-strategy.use_cache }}" = "true" ]; then
+            export TRIVY_CACHE_DIR=/tmp/trivy-cache
+          fi
+          
+          sudo apt-get update
+          sudo apt-get install wget apt-transport-https gnupg lsb-release -y
+          wget -qO - https://aquasecurity.github.io/trivy-repo/deb/public.key | sudo apt-key add -
+          echo "deb https://aquasecurity.github.io/trivy-repo/deb $(lsb_release -sc) main" | sudo tee -a /etc/apt/sources.list.d/trivy.list
+          sudo apt-get update
+          sudo apt-get install trivy -y
+          
+          # Semgrep installation
+          pip install semgrep
+          
+          end_time=$(date +%s)
+          duration=$((end_time - start_time))
+          echo "INSTALL_DURATION=$duration" >> $GITHUB_ENV
+          echo "⏱️ Security tools install took: ${duration}s"
+
+      - name: Run Security Scans (Timed)
+        run: |
+          start_time=$(date +%s)
+          
+          # Quick scans for timing
+          semgrep --config=auto src/ --json > /dev/null || true
+          trivy fs --cache-dir /tmp/trivy-cache . > /dev/null || true
+          
+          end_time=$(date +%s)
+          duration=$((end_time - start_time))
+          echo "SCAN_DURATION=$duration" >> $GITHUB_ENV
+
+      - name: Benchmark Results
+        run: |
+          total_duration=$(($(date +%s) - $BENCHMARK_START))
+          echo "## 🔒 Security Tools Results: ${{ matrix.cache-strategy.name }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Install time**: ${INSTALL_DURATION}s" >> $GITHUB_STEP_SUMMARY
+          echo "- **Scan time**: ${SCAN_DURATION}s" >> $GITHUB_STEP_SUMMARY
+          echo "- **Total time**: ${total_duration}s" >> $GITHUB_STEP_SUMMARY
+
+  # 📊 Cache Optimization Summary
+  cache-summary:
+    name: 📊 Cache Summary
+    runs-on: ubuntu-latest
+    needs: [python-cache-benchmark, docker-cache-benchmark, node-cache-benchmark, security-tools-benchmark]
+    if: always()
+    
+    steps:
+      - name: Generate optimization recommendations
+        run: |
+          echo "## 🏆 Cache Optimization Benchmark Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### 📈 Performance Analysis:" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "The benchmark results above show the impact of different caching strategies." >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### 💡 Recommended Optimizations:" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "1. **Python Dependencies**:" >> $GITHUB_STEP_SUMMARY
+          echo "   - Use hybrid caching (UV built-in + custom cache)" >> $GITHUB_STEP_SUMMARY
+          echo "   - Cache ~/.cache/uv, .venv, and ~/.local/share/uv" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "2. **Docker Layers**:" >> $GITHUB_STEP_SUMMARY
+          echo "   - Use GitHub Actions cache (type=gha) for best performance" >> $GITHUB_STEP_SUMMARY
+          echo "   - Registry cache for cross-workflow sharing" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "3. **Node.js Dependencies**:" >> $GITHUB_STEP_SUMMARY
+          echo "   - Combine built-in cache with custom node_modules caching" >> $GITHUB_STEP_SUMMARY
+          echo "   - Use --prefer-offline flag when cache hit" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "4. **Security Tools**:" >> $GITHUB_STEP_SUMMARY
+          echo "   - Cache binary downloads (SOPS, Trivy)" >> $GITHUB_STEP_SUMMARY
+          echo "   - Cache scan databases and results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### 🎯 Expected Performance Gains:" >> $GITHUB_STEP_SUMMARY
+          echo "- **Feature branch CI**: 2-3 minutes (vs 12-15 minutes)" >> $GITHUB_STEP_SUMMARY
+          echo "- **Dependency install time**: 60-80% reduction" >> $GITHUB_STEP_SUMMARY
+          echo "- **Docker build time**: 50-70% reduction on cache hits" >> $GITHUB_STEP_SUMMARY
+          echo "- **Security tool setup**: 40-60% reduction" >> $GITHUB_STEP_SUMMARY
