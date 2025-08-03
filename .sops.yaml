@@ -3,3 +3,4 @@ creation_rules:
   # All environments - use AWS KMS
   - path_regex: '^secrets/(.*)/secrets.dec\.ya?ml$'
     kms: 'arn:aws:kms:us-east-1:892193016253:key/af3d21e1-4bd2-470e-ae23-197f64c578be'
+    profile: 'eliodevbr-cdk'

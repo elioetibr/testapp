@@ -1,0 +1,61 @@
+import * as cdk from 'aws-cdk-lib';
+import * as ecs from 'aws-cdk-lib/aws-ecs';
+import * as elasticloadbalancingv2 from 'aws-cdk-lib/aws-elasticloadbalancingv2';
+import * as secretsmanager from 'aws-cdk-lib/aws-secretsmanager';
+import { Construct } from 'constructs';
+export interface ApplicationStackProps extends cdk.StackProps {
+    environment: string;
+    vpcId: string;
+    privateSubnetIds: string[];
+    applicationSecurityGroupId: string;
+    clusterArn: string;
+    clusterName: string;
+    repositoryUri: string;
+    loadBalancerArn: string;
+    httpListenerArn: string;
+    httpsListenerArn?: string;
+    logGroupName: string;
+    logGroupArn: string;
+    serviceName?: string;
+    taskImageTag?: string;
+    desiredCount?: number;
+    cpu?: number;
+    memoryLimitMiB?: number;
+    containerPort?: number;
+    minCapacity?: number;
+    maxCapacity?: number;
+    cpuTargetUtilization?: number;
+    memoryTargetUtilization?: number;
+    scaleInCooldownMinutes?: number;
+    scaleOutCooldownMinutes?: number;
+    healthCheckPath?: string;
+    healthCheckInterval?: number;
+    healthCheckTimeout?: number;
+    healthyThresholdCount?: number;
+    unhealthyThresholdCount?: number;
+    enableNonRootContainer?: boolean;
+    enableReadOnlyRootFilesystem?: boolean;
+    environmentVariables?: {
+        [key: string]: string;
+    };
+}
+export declare class ApplicationStack extends cdk.Stack {
+    readonly service: ecs.FargateService;
+    readonly taskDefinition: ecs.FargateTaskDefinition;
+    readonly container: ecs.ContainerDefinition;
+    readonly targetGroup: elasticloadbalancingv2.ApplicationTargetGroup;
+    readonly scalableTarget: ecs.ScalableTaskCount;
+    readonly appSecrets: secretsmanager.Secret;
+    private readonly secretsLoader;
+    constructor(scope: Construct, id: string, props: ApplicationStackProps);
+    private createSecretsManagerSecret;
+    private createIamRoles;
+    private createTaskDefinition;
+    private createContainerDefinition;
+    private createTargetGroup;
+    private createFargateService;
+    private configureHealthCheck;
+    private createAutoScaling;
+    private addListenerRules;
+    private createOutputs;
+}

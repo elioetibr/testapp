@@ -1,7 +1,7 @@
 # Makefile for TestApp Container Management
 # Usage: make <target>
 
-.PHONY: help build build-dev build-prod run run-dev run-prod stop clean test logs shell sops-setup sops-encrypt sops-decrypt sops-encrypt-pattern sops-decrypt-pattern sops-to-act sops-test requirements-snyk lint format test-django test-coverage install sync check security audit infra-install infra-build infra-test infra-synth infra-diff infra-deploy infra-deploy-dev infra-deploy-prod infra-destroy infra-destroy-dev infra-destroy-prod infra-enable-waf infra-enable-flow-logs infra-enable-https infra-enable-container-security infra-disable-security infra-security-status
+.PHONY: help build build-dev build-prod run run-dev run-prod stop clean test logs shell sops-setup sops-encrypt sops-decrypt sops-encrypt-pattern sops-decrypt-pattern sops-to-act sops-test requirements-snyk lint format test-django test-coverage install sync check security audit infra-install infra-build infra-test infra-synth infra-diff infra-deploy infra-deploy-dev infra-deploy-staging infra-deploy-prod infra-deploy-vpc infra-deploy-platform infra-deploy-app infra-deploy-all infra-destroy infra-destroy-dev infra-destroy-staging infra-destroy-prod infra-destroy-all infra-enable-waf infra-enable-flow-logs infra-enable-https infra-enable-container-security infra-disable-security infra-security-status
 
 # Default target
 .DEFAULT_GOAL := help
@@ -289,45 +289,116 @@ infra-diff: infra-build ## Show infrastructure changes
 
 infra-deploy: infra-deploy-dev ## Deploy to default (dev) environment
 
-infra-deploy-dev: infra-build ## Deploy infrastructure to development environment
+infra-deploy-dev: infra-build ## Deploy all stacks to development environment
 	@echo "$(BLUE)🚀 Deploying infrastructure to development...$(NC)"
-	@cd infrastructure && npm run deploy -- TestApp-dev --require-approval never
+	@cd infrastructure && npx cdk deploy TestApp-VPC-dev TestApp-Platform-dev TestApp-App-dev --require-approval never
 	@echo "$(GREEN)✅ Development infrastructure deployed$(NC)"
 
-infra-deploy-prod: infra-build ## Deploy infrastructure to production environment
+infra-deploy-staging: infra-build ## Deploy all stacks to staging environment
+	@echo "$(BLUE)🚀 Deploying infrastructure to staging...$(NC)"
+	@echo "$(YELLOW)⚠️  This will deploy to STAGING environment$(NC)"
+	@read -p "Deploy to staging? Type 'yes' to continue: " confirm; \
+	if [ "$$confirm" = "yes" ]; then \
+		cd infrastructure && npx cdk deploy TestApp-VPC-staging TestApp-Platform-staging TestApp-App-staging --require-approval never; \
+		echo "$(GREEN)✅ Staging infrastructure deployed$(NC)"; \
+	else \
+		echo "$(YELLOW)🚫 Staging deployment cancelled$(NC)"; \
+	fi
+
+infra-deploy-prod: infra-build ## Deploy all stacks to production environment
 	@echo "$(BLUE)🚀 Deploying infrastructure to production...$(NC)"
 	@echo "$(YELLOW)⚠️  This will deploy to PRODUCTION environment$(NC)"
 	@read -p "Are you sure? Type 'yes' to continue: " confirm; \
 	if [ "$$confirm" = "yes" ]; then \
-		cd infrastructure && npm run deploy -- TestApp-production --require-approval never; \
+		cd infrastructure && npx cdk deploy TestApp-VPC-production TestApp-Platform-production TestApp-App-production --require-approval never; \
 		echo "$(GREEN)✅ Production infrastructure deployed$(NC)"; \
 	else \
 		echo "$(YELLOW)🚫 Production deployment cancelled$(NC)"; \
 	fi
 
+# Individual Stack Deployment Commands
+infra-deploy-vpc: infra-build ## Deploy VPC stack only (specify ENV=dev/staging/prod)
+	@if [ -z "$(ENV)" ]; then \
+		echo "$(RED)❌ ENV not specified. Usage: make infra-deploy-vpc ENV=dev$(NC)"; \
+		exit 1; \
+	fi
+	@echo "$(BLUE)🌐 Deploying VPC stack to $(ENV)...$(NC)"
+	@cd infrastructure && npx cdk deploy TestApp-VPC-$(ENV) --require-approval never --context environment=$(ENV)
+	@echo "$(GREEN)✅ VPC stack deployed to $(ENV)$(NC)"
+
+infra-deploy-platform: infra-build ## Deploy Platform stack only (specify ENV=dev/staging/prod)
+	@if [ -z "$(ENV)" ]; then \
+		echo "$(RED)❌ ENV not specified. Usage: make infra-deploy-platform ENV=dev$(NC)"; \
+		exit 1; \
+	fi
+	@echo "$(BLUE)⚙️  Deploying Platform stack to $(ENV)...$(NC)"
+	@cd infrastructure && npx cdk deploy TestApp-Platform-$(ENV) --require-approval never --context environment=$(ENV)
+	@echo "$(GREEN)✅ Platform stack deployed to $(ENV)$(NC)"
+
+infra-deploy-app: infra-build ## Deploy Application stack only (specify ENV=dev/staging/prod)
+	@if [ -z "$(ENV)" ]; then \
+		echo "$(RED)❌ ENV not specified. Usage: make infra-deploy-app ENV=dev$(NC)"; \
+		exit 1; \
+	fi
+	@echo "$(BLUE)📦 Deploying Application stack to $(ENV)...$(NC)"
+	@cd infrastructure && npx cdk deploy TestApp-App-$(ENV) --require-approval never --context environment=$(ENV)
+	@echo "$(GREEN)✅ Application stack deployed to $(ENV)$(NC)"
+
+infra-deploy-all: infra-build ## Deploy all stacks (specify ENV=dev/staging/prod)
+	@if [ -z "$(ENV)" ]; then \
+		echo "$(RED)❌ ENV not specified. Usage: make infra-deploy-all ENV=dev$(NC)"; \
+		exit 1; \
+	fi
+	@echo "$(BLUE)🚀 Deploying all stacks to $(ENV)...$(NC)"
+	@cd infrastructure && npx cdk deploy TestApp-VPC-$(ENV) TestApp-Platform-$(ENV) TestApp-App-$(ENV) --require-approval never --context environment=$(ENV)
+	@echo "$(GREEN)✅ All stacks deployed to $(ENV)$(NC)"
+
 infra-destroy: infra-destroy-dev ## Destroy default (dev) environment
 
-infra-destroy-dev: ## Destroy development infrastructure
+infra-destroy-dev: ## Destroy development infrastructure (all stacks)
 	@echo "$(BLUE)💥 Destroying development infrastructure...$(NC)"
 	@echo "$(YELLOW)⚠️  This will DELETE all development resources$(NC)"
 	@read -p "Are you sure? Type 'yes' to continue: " confirm; \
 	if [ "$$confirm" = "yes" ]; then \
-		cd infrastructure && npx cdk destroy TestApp-dev --force; \
+		cd infrastructure && npx cdk destroy TestApp-App-dev TestApp-Platform-dev TestApp-VPC-dev --force; \
 		echo "$(GREEN)✅ Development infrastructure destroyed$(NC)"; \
 	else \
 		echo "$(YELLOW)🚫 Development destroy cancelled$(NC)"; \
 	fi
 
-infra-destroy-prod: ## Destroy production infrastructure
+infra-destroy-staging: ## Destroy staging infrastructure (all stacks)
+	@echo "$(BLUE)💥 Destroying staging infrastructure...$(NC)"
+	@echo "$(YELLOW)⚠️  This will DELETE all staging resources$(NC)"
+	@read -p "Are you sure? Type 'yes' to continue: " confirm; \
+	if [ "$$confirm" = "yes" ]; then \
+		cd infrastructure && npx cdk destroy TestApp-App-staging TestApp-Platform-staging TestApp-VPC-staging --force; \
+		echo "$(GREEN)✅ Staging infrastructure destroyed$(NC)"; \
+	else \
+		echo "$(YELLOW)🚫 Staging destroy cancelled$(NC)"; \
+	fi
+
+infra-destroy-prod: ## Destroy production infrastructure (all stacks)
 	@echo "$(BLUE)💥 Destroying production infrastructure...$(NC)"
 	@echo "$(RED)⚠️  WARNING: This will DELETE all PRODUCTION resources!$(NC)"
 	@echo "$(RED)⚠️  This action is IRREVERSIBLE!$(NC)"
 	@read -p "Type 'DELETE-PRODUCTION' to confirm: " confirm; \
 	if [ "$$confirm" = "DELETE-PRODUCTION" ]; then \
-		cd infrastructure && npx cdk destroy TestApp-production --force; \
+		cd infrastructure && npx cdk destroy TestApp-App-production TestApp-Platform-production TestApp-VPC-production --force; \
 		echo "$(GREEN)✅ Production infrastructure destroyed$(NC)"; \
 	else \
 		echo "$(YELLOW)🚫 Production destroy cancelled$(NC)"; \
+	fi
+
+infra-destroy-all: ## Destroy infrastructure for all environments
+	@echo "$(BLUE)💥 Destroying ALL environments...$(NC)"
+	@echo "$(RED)⚠️  WARNING: This will DELETE ALL resources in ALL environments!$(NC)"
+	@echo "$(RED)⚠️  This action is IRREVERSIBLE!$(NC)"
+	@read -p "Type 'DESTROY-ALL-ENVIRONMENTS' to confirm: " confirm; \
+	if [ "$$confirm" = "DESTROY-ALL-ENVIRONMENTS" ]; then \
+		cd infrastructure && npx cdk destroy --all --force; \
+		echo "$(GREEN)✅ All infrastructure destroyed$(NC)"; \
+	else \
+		echo "$(YELLOW)🚫 All environments destroy cancelled$(NC)"; \
 	fi
 
 # Security Enhancement Commands
@@ -404,12 +475,44 @@ infra-disable-security: ## Disable all security enhancements (reset to defaults)
 		echo "$(YELLOW)🚫 Security disable cancelled$(NC)"; \
 	fi
 
+# Additional Infrastructure Commands
+infra-list: ## List all CDK stacks
+	@echo "$(BLUE)📋 Listing all CDK stacks...$(NC)"
+	@cd infrastructure && npx cdk list
+	@echo ""
+
+infra-diff-vpc: ## Show VPC stack differences (specify ENV=dev/staging/prod)
+	@if [ -z "$(ENV)" ]; then \
+		echo "$(RED)❌ ENV not specified. Usage: make infra-diff-vpc ENV=dev$(NC)"; \
+		exit 1; \
+	fi
+	@echo "$(BLUE)🔍 Showing VPC stack diff for $(ENV)...$(NC)"
+	@cd infrastructure && npx cdk diff TestApp-VPC-$(ENV) --context environment=$(ENV)
+
+infra-diff-platform: ## Show Platform stack differences (specify ENV=dev/staging/prod) 
+	@if [ -z "$(ENV)" ]; then \
+		echo "$(RED)❌ ENV not specified. Usage: make infra-diff-platform ENV=dev$(NC)"; \
+		exit 1; \
+	fi
+	@echo "$(BLUE)🔍 Showing Platform stack diff for $(ENV)...$(NC)"
+	@cd infrastructure && npx cdk diff TestApp-Platform-$(ENV) --context environment=$(ENV)
+
+infra-diff-app: ## Show Application stack differences (specify ENV=dev/staging/prod)
+	@if [ -z "$(ENV)" ]; then \
+		echo "$(RED)❌ ENV not specified. Usage: make infra-diff-app ENV=dev$(NC)"; \
+		exit 1; \
+	fi
+	@echo "$(BLUE)🔍 Showing Application stack diff for $(ENV)...$(NC)"
+	@cd infrastructure && npx cdk diff TestApp-App-$(ENV) --context environment=$(ENV)
+
 infra-security-status: ## Show current security configuration status
 	@echo "$(BLUE)🔍 Infrastructure Security Status$(NC)"
 	@echo ""
-	@echo "$(GREEN)Current Security Configuration:$(NC)"
-	@grep -E "(enableWAF|enableVPCFlowLogs|enableHTTPS|domainName|enableNonRootContainer|enableReadOnlyRootFilesystem)" infrastructure/bin/testapp-infrastructure.ts | \
-		sed 's/^[ ]*/  /' | \
+	@echo "$(GREEN)Current Security Configuration by Environment:$(NC)"
+	@echo ""
+	@echo "$(YELLOW)Development Environment:$(NC)"
+	@grep -A 30 "dev: {" infrastructure/bin/testapp-infrastructure.ts | grep -E "(enableWAF|enableVPCFlowLogs|enableHTTPS|enableNonRootContainer|enableReadOnlyRootFilesystem)" | \
+		sed 's/^[ ]*/    /' | \
 		sed 's/enableWAF: true/$(GREEN)✅ WAF Protection: ENABLED$(NC)/' | \
 		sed 's/enableWAF: false/$(RED)❌ WAF Protection: DISABLED$(NC)/' | \
 		sed 's/enableVPCFlowLogs: true/$(GREEN)✅ VPC Flow Logs: ENABLED$(NC)/' | \
@@ -419,6 +522,38 @@ infra-security-status: ## Show current security configuration status
 		sed 's/enableNonRootContainer: true/$(GREEN)✅ Non-Root Container: ENABLED$(NC)/' | \
 		sed 's/enableNonRootContainer: false/$(RED)❌ Non-Root Container: DISABLED$(NC)/' | \
 		sed 's/enableReadOnlyRootFilesystem: true/$(GREEN)✅ Read-Only Filesystem: ENABLED$(NC)/' | \
-		sed 's/enableReadOnlyRootFilesystem: false/$(RED)❌ Read-Only Filesystem: DISABLED$(NC)/' | \
-		grep -v "domainName: undefined"
+		sed 's/enableReadOnlyRootFilesystem: false/$(RED)❌ Read-Only Filesystem: DISABLED$(NC)/'
+	@echo ""
+	@echo "$(YELLOW)Staging Environment:$(NC)"
+	@grep -A 30 "staging: {" infrastructure/bin/testapp-infrastructure.ts | grep -E "(enableWAF|enableVPCFlowLogs|enableHTTPS|enableNonRootContainer|enableReadOnlyRootFilesystem)" | \
+		sed 's/^[ ]*/    /' | \
+		sed 's/enableWAF: true/$(GREEN)✅ WAF Protection: ENABLED$(NC)/' | \
+		sed 's/enableWAF: false/$(RED)❌ WAF Protection: DISABLED$(NC)/' | \
+		sed 's/enableVPCFlowLogs: true/$(GREEN)✅ VPC Flow Logs: ENABLED$(NC)/' | \
+		sed 's/enableVPCFlowLogs: false/$(RED)❌ VPC Flow Logs: DISABLED$(NC)/' | \
+		sed 's/enableHTTPS: true/$(GREEN)✅ HTTPS\/TLS: ENABLED$(NC)/' | \
+		sed 's/enableHTTPS: false/$(RED)❌ HTTPS\/TLS: DISABLED$(NC)/' | \
+		sed 's/enableNonRootContainer: true/$(GREEN)✅ Non-Root Container: ENABLED$(NC)/' | \
+		sed 's/enableNonRootContainer: false/$(RED)❌ Non-Root Container: DISABLED$(NC)/' | \
+		sed 's/enableReadOnlyRootFilesystem: true/$(GREEN)✅ Read-Only Filesystem: ENABLED$(NC)/' | \
+		sed 's/enableReadOnlyRootFilesystem: false/$(RED)❌ Read-Only Filesystem: DISABLED$(NC)/'
+	@echo ""
+	@echo "$(YELLOW)Production Environment:$(NC)"
+	@grep -A 30 "production: {" infrastructure/bin/testapp-infrastructure.ts | grep -E "(enableWAF|enableVPCFlowLogs|enableHTTPS|enableNonRootContainer|enableReadOnlyRootFilesystem)" | \
+		sed 's/^[ ]*/    /' | \
+		sed 's/enableWAF: true/$(GREEN)✅ WAF Protection: ENABLED$(NC)/' | \
+		sed 's/enableWAF: false/$(RED)❌ WAF Protection: DISABLED$(NC)/' | \
+		sed 's/enableVPCFlowLogs: true/$(GREEN)✅ VPC Flow Logs: ENABLED$(NC)/' | \
+		sed 's/enableVPCFlowLogs: false/$(RED)❌ VPC Flow Logs: DISABLED$(NC)/' | \
+		sed 's/enableHTTPS: true/$(GREEN)✅ HTTPS\/TLS: ENABLED$(NC)/' | \
+		sed 's/enableHTTPS: false/$(RED)❌ HTTPS\/TLS: DISABLED$(NC)/' | \
+		sed 's/enableNonRootContainer: true/$(GREEN)✅ Non-Root Container: ENABLED$(NC)/' | \
+		sed 's/enableNonRootContainer: false/$(RED)❌ Non-Root Container: DISABLED$(NC)/' | \
+		sed 's/enableReadOnlyRootFilesystem: true/$(GREEN)✅ Read-Only Filesystem: ENABLED$(NC)/' | \
+		sed 's/enableReadOnlyRootFilesystem: false/$(RED)❌ Read-Only Filesystem: DISABLED$(NC)/'
+	@echo ""
+	@echo "$(BLUE)💡 Quick deployment commands:$(NC)"
+	@echo "  $(YELLOW)make infra-deploy-dev$(NC)        - Deploy all dev stacks"
+	@echo "  $(YELLOW)make infra-deploy-vpc ENV=dev$(NC) - Deploy VPC stack only"
+	@echo "  $(YELLOW)make infra-deploy-all ENV=prod$(NC) - Deploy all prod stacks"
 	@echo ""
