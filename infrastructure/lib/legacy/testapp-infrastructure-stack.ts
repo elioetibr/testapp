@@ -11,7 +11,7 @@ import * as wafv2 from 'aws-cdk-lib/aws-wafv2';
 import * as s3 from 'aws-cdk-lib/aws-s3';
 import * as certificatemanager from 'aws-cdk-lib/aws-certificatemanager';
 import { Construct } from 'constructs';
-import { SecretsLoader } from './secrets-loader';
+import { SecretsLoader } from '../secrets-loader';
 
 export interface TestAppInfrastructureStackProps extends cdk.StackProps {
   environment: string;

@@ -1,0 +1,11 @@
+"use strict";
+// Test setup to suppress console warnings during tests
+beforeAll(() => {
+    // Mock console.warn to reduce noise from SOPS fallback messages
+    jest.spyOn(console, 'warn').mockImplementation(() => { });
+});
+afterAll(() => {
+    // Restore console.warn
+    console.warn.mockRestore();
+});
+//# sourceMappingURL=data:application/json;base64,eyJ2ZXJzaW9uIjozLCJmaWxlIjoic2V0dXAuanMiLCJzb3VyY2VSb290IjoiIiwic291cmNlcyI6WyJzZXR1cC50cyJdLCJuYW1lcyI6W10sIm1hcHBpbmdzIjoiO0FBQUEsdURBQXVEO0FBQ3ZELFNBQVMsQ0FBQyxHQUFHLEVBQUU7SUFDYixnRUFBZ0U7SUFDaEUsSUFBSSxDQUFDLEtBQUssQ0FBQyxPQUFPLEVBQUUsTUFBTSxDQUFDLENBQUMsa0JBQWtCLENBQUMsR0FBRyxFQUFFLEdBQUUsQ0FBQyxDQUFDLENBQUM7QUFDM0QsQ0FBQyxDQUFDLENBQUM7QUFFSCxRQUFRLENBQUMsR0FBRyxFQUFFO0lBQ1osdUJBQXVCO0lBQ3RCLE9BQU8sQ0FBQyxJQUFrQixDQUFDLFdBQVcsRUFBRSxDQUFDO0FBQzVDLENBQUMsQ0FBQyxDQUFDIiwic291cmNlc0NvbnRlbnQiOlsiLy8gVGVzdCBzZXR1cCB0byBzdXBwcmVzcyBjb25zb2xlIHdhcm5pbmdzIGR1cmluZyB0ZXN0c1xuYmVmb3JlQWxsKCgpID0+IHtcbiAgLy8gTW9jayBjb25zb2xlLndhcm4gdG8gcmVkdWNlIG5vaXNlIGZyb20gU09QUyBmYWxsYmFjayBtZXNzYWdlc1xuICBqZXN0LnNweU9uKGNvbnNvbGUsICd3YXJuJykubW9ja0ltcGxlbWVudGF0aW9uKCgpID0+IHt9KTtcbn0pO1xuXG5hZnRlckFsbCgoKSA9PiB7XG4gIC8vIFJlc3RvcmUgY29uc29sZS53YXJuXG4gIChjb25zb2xlLndhcm4gYXMgamVzdC5Nb2NrKS5tb2NrUmVzdG9yZSgpO1xufSk7Il19

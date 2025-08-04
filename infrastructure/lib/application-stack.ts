@@ -405,6 +405,9 @@ export class ApplicationStack extends cdk.Stack {
       securityGroups: [securityGroup],
       assignPublicIp: false, // Running in private subnets
       enableExecuteCommand: props.environment !== 'production', // Enable ECS Exec for dev/staging
+      // Deployment configuration for zero-downtime deployments in production
+      minHealthyPercent: props.environment === 'production' ? 100 : 50,
+      maxHealthyPercent: props.environment === 'production' ? 200 : 150,
     });
 
     // Configure service load balancers

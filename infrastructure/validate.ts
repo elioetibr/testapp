@@ -1,7 +1,7 @@
 #!/usr/bin/env ts-node
 
 import * as cdk from 'aws-cdk-lib';
-import { TestAppInfrastructureStack } from './lib/testapp-infrastructure-stack';
+import { TestAppInfrastructureStack } from './lib/legacy/testapp-infrastructure-stack';
 
 // Create a validation app without AWS authentication
 const app = new cdk.App();

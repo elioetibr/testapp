@@ -40,6 +40,11 @@ export class EcsPlatformStack extends cdk.Stack {
   constructor(scope: Construct, id: string, props: EcsPlatformStackProps) {
     super(scope, id, props);
 
+    // Validate configuration
+    if (props.enableHTTPS && !props.domainName) {
+      throw new Error('Domain name is required when HTTPS is enabled');
+    }
+
     // Import VPC and subnets
     const vpc = ec2.Vpc.fromVpcAttributes(this, 'ImportedVpc', {
       vpcId: props.vpcId,
