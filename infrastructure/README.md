@@ -69,38 +69,63 @@ npm install
 # Build TypeScript
 npm run build
 
-# Deploy to development (default)
-npx cdk deploy TestApp-dev
+# Deploy to development (creates full infrastructure)
+npx cdk deploy TestApp-VPC-dev TestApp-Platform-dev TestApp-App-dev --context environment=dev
 
-# Deploy to production
-npx cdk deploy TestApp-production
+# Deploy to production (creates full infrastructure)  
+npx cdk deploy TestApp-VPC-production TestApp-Platform-production TestApp-App-production --context environment=production
+
+# Deploy PR environment (ephemeral - reuses existing dev infrastructure)
+npx cdk deploy TestApp-App-dev-pr-123 --context environment=dev --context prId=123
 
 # View differences
-npx cdk diff TestApp-production
+npx cdk diff --context environment=production
 
 # Synthesize CloudFormation templates
 npx cdk synth
 ```
 
-## 🔒 Security Enhancement Commands
+## 🔒 Security Configuration
 
-All security features are **disabled by default** for cost optimization. Enable as needed:
+**HTTPS/TLS is enabled by default** for all environments using ACM certificates:
 
+- **Certificate**: `assessment.elio.eti.br` with wildcard `*.assessment.elio.eti.br`
+- **Development**: `https://dev-testapp.assessment.elio.eti.br`
+- **Production**: `https://testapp.assessment.elio.eti.br` 
+- **PR Deployments**: `https://pr-{id}-testapp.assessment.elio.eti.br`
+
+**Environment-Specific Security Features:**
+
+**Development Environment:**
+- HTTPS/TLS: ✅ Enabled
+- WAF Protection: ❌ Disabled (cost optimization)
+- VPC Flow Logs: ❌ Disabled (cost optimization) 
+- Container Security: ❌ Disabled (development flexibility)
+
+**Production Environment:**
+- HTTPS/TLS: ✅ Enabled
+- WAF Protection: ✅ Enabled
+- VPC Flow Logs: ✅ Enabled
+- Container Security: ✅ Enabled (non-root, read-only filesystem)
+
+**PR Deployments (Ephemeral):**
+- **Infrastructure**: Reuses existing dev VPC and ECS cluster  
+- **Resources**: Only creates new ECS service/task
+- **Security**: Inherits from base development environment
+- **Cost**: Minimal additional resources (1-2 containers)
+- **Cleanup**: Delete stack when PR is merged
+
+**Deployment Examples:**
 ```bash
-# Enable AWS WAF protection
-make infra-enable-waf
+# Deploy regular development environment
+npx cdk deploy --context environment=dev
 
-# Enable VPC Flow Logs monitoring
-make infra-enable-flow-logs
+# Deploy ephemeral PR environment  
+npx cdk deploy --context environment=dev --context prId=456
 
-# Enable HTTPS/TLS with certificate
-make infra-enable-https
-
-# Enable container security (non-root, read-only filesystem)
-make infra-enable-container-security
-
-# Check current security status
+# Check security status
 make infra-security-status
+```
 
 # Disable all security features (reset to defaults)
 make infra-disable-security

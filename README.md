@@ -381,6 +381,11 @@ The project includes enterprise-grade AWS infrastructure using CDK with TypeScri
 - **HTTPS/TLS** - SSL certificates with automatic renewal
 - **Container Security** - Non-root users and read-only filesystems
 
+**Supported Environments:**
+- **Development**: `https://dev-testapp.assessment.elio.eti.br`
+- **Production**: `https://testapp.assessment.elio.eti.br`
+- **PR Deployments**: `https://pr-{id}-testapp.assessment.elio.eti.br` (ephemeral)
+
 **Infrastructure Commands:**
 ```bash
 # Install and build infrastructure
@@ -392,11 +397,14 @@ make infra-test
 make infra-deploy-dev       # Development environment
 make infra-deploy-prod      # Production environment
 
-# Security enhancements
-make infra-enable-waf       # Enable WAF protection
-make infra-enable-flow-logs # Enable VPC monitoring
-make infra-enable-https     # Enable HTTPS/TLS
-make infra-security-status  # Check current status
+# Deploy PR environments (ephemeral - reuses existing VPC/ECS)
+npx cdk deploy --context environment=dev --context prId=123
+
+# Security enhancements (enabled by default)
+# - HTTPS/TLS with ACM certificates (assessment.elio.eti.br + *.assessment.elio.eti.br)
+# - WAF protection (production)
+# - VPC Flow Logs (production)
+# - Container security hardening
 ```
 
 See [infrastructure/README.md](infrastructure/README.md) for detailed infrastructure documentation.

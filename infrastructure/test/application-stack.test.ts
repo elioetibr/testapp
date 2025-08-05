@@ -908,6 +908,84 @@ describe('ApplicationStack', () => {
     });
   });
 
+  describe('Domain Name Generation', () => {
+    test('handles PR deployment domain generation', () => {
+      app = new cdk.App();
+      // Create stack with PR configuration but no hostedZoneId so no DNS records are created
+      const stack = new ApplicationStack(app, 'TestApplicationStack', {
+        ...defaultProps,
+        baseDomain: 'example.com',
+        appName: 'myapp',
+        prId: '123',
+        // hostedZoneId intentionally omitted to avoid DNS record creation
+      });
+      template = Template.fromStack(stack);
+
+      // Should not create DNS records but should handle PR domain logic
+      template.resourceCountIs('AWS::Route53::RecordSet', 0);
+    });
+
+    test('handles production domain generation', () => {
+      app = new cdk.App();
+      // Create stack with production configuration but no hostedZoneId so no DNS records are created
+      const stack = new ApplicationStack(app, 'TestApplicationStack', {
+        ...defaultProps,
+        baseDomain: 'example.com',
+        appName: 'myapp',
+        environment: 'production',
+        // hostedZoneId intentionally omitted to avoid DNS record creation
+      });
+      template = Template.fromStack(stack);
+
+      // Should not create DNS records but should handle production domain logic
+      template.resourceCountIs('AWS::Route53::RecordSet', 0);
+    });
+  });
+
+  describe('Route53 DNS Configuration', () => {
+    test('does not create DNS records when domain configuration missing', () => {
+      app = new cdk.App();
+      const stack = new ApplicationStack(app, 'TestApplicationStack', {
+        ...defaultProps,
+        // No domain configuration provided
+      });
+      template = Template.fromStack(stack);
+
+      // Should not create any Route53 records
+      template.resourceCountIs('AWS::Route53::RecordSet', 0);
+    });
+
+    test('does not create DNS records when hostedZoneId missing', () => {
+      app = new cdk.App();
+      const stack = new ApplicationStack(app, 'TestApplicationStack', {
+        ...defaultProps,
+        baseDomain: 'example.com',
+        appName: 'myapp',
+        // hostedZoneId not provided
+      });
+      template = Template.fromStack(stack);
+
+      // Should not create any Route53 records
+      template.resourceCountIs('AWS::Route53::RecordSet', 0);
+    });
+  });
+
+  describe('Application URL Output Configuration', () => {
+    test('creates application URL outputs correctly', () => {
+      app = new cdk.App();
+      const stack = new ApplicationStack(app, 'TestApplicationStack', {
+        ...defaultProps,
+        // Use default configuration to test URL output generation
+      });
+      template = Template.fromStack(stack);
+
+      // Should create ApplicationUrl output with ALB DNS name
+      template.hasOutput('ApplicationUrl', {
+        Description: 'Application URL (ALB DNS)',
+      });
+    });
+  });
+
   describe('SOPS Integration Error Handling', () => {
     test('handles SOPS loading failure gracefully', () => {
       // This test simulates the error handling path in createSecretsManagerSecret

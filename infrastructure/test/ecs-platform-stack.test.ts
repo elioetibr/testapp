@@ -11,7 +11,8 @@ describe('EcsPlatformStack', () => {
     vpcId: 'vpc-12345678',
     publicSubnetIds: ['subnet-11111111', 'subnet-22222222', 'subnet-33333333'],
     loadBalancerSecurityGroupId: 'sg-12345678',
-    domainName: 'example.com',
+    baseDomain: 'example.com',
+    appName: 'testapp',
     hostedZoneId: 'Z123456789',
     stackName: 'TestEcsPlatformStack',
     env: {
@@ -178,7 +179,6 @@ describe('EcsPlatformStack', () => {
       const stack = new EcsPlatformStack(app, 'TestEcsPlatformStack', {
         ...defaultProps,
         enableHTTPS: true,
-        domainName: 'example.com',
       });
       template = Template.fromStack(stack);
     });
@@ -219,39 +219,7 @@ describe('EcsPlatformStack', () => {
     });
   });
 
-  describe('Route53 DNS Configuration', () => {
-    beforeEach(() => {
-      app = new cdk.App();
-      const stack = new EcsPlatformStack(app, 'TestEcsPlatformStack', {
-        ...defaultProps,
-        domainName: 'example.com',
-        hostedZoneId: 'Z123456789',
-      });
-      template = Template.fromStack(stack);
-    });
-
-    test('creates A record for domain', () => {
-      template.hasResourceProperties('AWS::Route53::RecordSet', {
-        Type: 'A',
-        Name: 'example.com.',
-        AliasTarget: {
-          DNSName: { 'Fn::Join': Match.anyValue() },
-          HostedZoneId: { 'Fn::GetAtt': [Match.anyValue(), 'CanonicalHostedZoneID'] },
-        },
-      });
-    });
-
-    test('creates AAAA record for IPv6', () => {
-      template.hasResourceProperties('AWS::Route53::RecordSet', {
-        Type: 'AAAA',
-        Name: 'example.com.',
-        AliasTarget: {
-          DNSName: { 'Fn::Join': Match.anyValue() },
-          HostedZoneId: { 'Fn::GetAtt': [Match.anyValue(), 'CanonicalHostedZoneID'] },
-        },
-      });
-    });
-  });
+  // Route53 DNS Configuration tests removed - DNS records are now handled by ApplicationStack
 
   describe('WAF Configuration', () => {
     beforeEach(() => {
@@ -398,7 +366,9 @@ describe('EcsPlatformStack', () => {
       stack = new EcsPlatformStack(app, 'TestEcsPlatformStack', {
         ...defaultProps,
         enableHTTPS: true,
-        domainName: 'example.com',
+        baseDomain: 'example.com',
+        appName: 'testapp',
+        hostedZoneId: 'Z123456789',
         enableWAF: true,
       });
       template = Template.fromStack(stack);
@@ -488,27 +458,10 @@ describe('EcsPlatformStack', () => {
       });
     });
 
-    test('creates application URL with custom domain', () => {
-      template.hasOutput('ApplicationUrl', {
-        Description: 'Application URL',
-        Value: 'https://example.com',
-      });
-    });
+    // Application URL test removed - Application URLs are now handled by ApplicationStack
   });
 
-  describe('Application URL without Custom Domain', () => {
-    beforeEach(() => {
-      app = new cdk.App();
-      const stack = new EcsPlatformStack(app, 'TestEcsPlatformStack', defaultProps);
-      template = Template.fromStack(stack);
-    });
-
-    test('creates application URL with ALB DNS name', () => {
-      template.hasOutput('ApplicationUrl', {
-        Description: 'Application URL',
-      });
-    });
-  });
+  // Application URL tests removed - Application URLs are now handled by ApplicationStack
 
   describe('Resource Tagging', () => {
     beforeEach(() => {
@@ -517,7 +470,9 @@ describe('EcsPlatformStack', () => {
         ...defaultProps,
         environment: 'production',
         enableHTTPS: true,
-        domainName: 'example.com',
+        baseDomain: 'example.com',
+        appName: 'testapp',
+        hostedZoneId: 'Z123456789',
         enableWAF: true,
       });
       template = Template.fromStack(stack);
@@ -571,7 +526,7 @@ describe('EcsPlatformStack', () => {
   });
 
   describe('Error Handling and Edge Cases', () => {
-    test.skip('throws error when HTTPS enabled but no domain provided', () => {
+    test('throws error when HTTPS enabled but no domain provided', () => {
       expect(() => {
         const app = new cdk.App();
         new EcsPlatformStack(app, 'TestHttpsValidation', {
@@ -585,9 +540,49 @@ describe('EcsPlatformStack', () => {
             region: 'us-east-1',
           },
           enableHTTPS: true,
-          // domainName intentionally omitted to test validation
+          // baseDomain and appName intentionally omitted to test validation
         });
-      }).toThrow('Domain name is required when HTTPS is enabled');
+      }).toThrow('Base domain and app name are required when HTTPS is enabled');
+    });
+
+    test('throws error when HTTPS enabled but only baseDomain provided', () => {
+      expect(() => {
+        const app = new cdk.App();
+        new EcsPlatformStack(app, 'TestHttpsValidation2', {
+          environment: 'test',
+          vpcId: 'vpc-12345678',
+          publicSubnetIds: ['subnet-11111111'],
+          loadBalancerSecurityGroupId: 'sg-12345678',
+          stackName: 'TestHttpsValidation2',
+          env: {
+            account: '123456789012',
+            region: 'us-east-1',
+          },
+          enableHTTPS: true,
+          baseDomain: 'example.com',
+          // appName intentionally omitted to test validation
+        });
+      }).toThrow('Base domain and app name are required when HTTPS is enabled');
+    });
+
+    test('throws error when HTTPS enabled but only appName provided', () => {
+      expect(() => {
+        const app = new cdk.App();
+        new EcsPlatformStack(app, 'TestHttpsValidation3', {
+          environment: 'test',
+          vpcId: 'vpc-12345678',
+          publicSubnetIds: ['subnet-11111111'],
+          loadBalancerSecurityGroupId: 'sg-12345678',
+          stackName: 'TestHttpsValidation3',
+          env: {
+            account: '123456789012',
+            region: 'us-east-1',
+          },
+          enableHTTPS: true,
+          appName: 'testapp',
+          // baseDomain intentionally omitted to test validation
+        });
+      }).toThrow('Base domain and app name are required when HTTPS is enabled');
     });
 
     test('handles missing optional parameters gracefully', () => {
@@ -614,8 +609,9 @@ describe('EcsPlatformStack', () => {
       const stack = new EcsPlatformStack(app, 'TestEcsPlatformStack', {
         ...defaultProps,
         enableHTTPS: true,
-        domainName: 'example.com',
-        // hostedZoneId not provided
+        baseDomain: 'example.com',
+        appName: 'testapp',
+        // hostedZoneId not provided - should still work
       });
       template = Template.fromStack(stack);
 
@@ -655,15 +651,16 @@ describe('EcsPlatformStack', () => {
       }, 0);
     });
 
-    test('no DNS records without hosted zone', () => {
+    test('does not create DNS records (handled by ApplicationStack)', () => {
       app = new cdk.App();
       const stack = new EcsPlatformStack(app, 'TestEcsPlatformStack', {
         environment: 'test',
         vpcId: 'vpc-12345678',
         publicSubnetIds: ['subnet-11111111', 'subnet-22222222', 'subnet-33333333'],
         loadBalancerSecurityGroupId: 'sg-12345678',
-        domainName: 'example.com',
-        // hostedZoneId not provided
+        baseDomain: 'example.com',
+        appName: 'testapp',
+        hostedZoneId: 'Z123456789',
         stackName: 'TestEcsPlatformStack',
         env: {
           account: '123456789012',
@@ -672,6 +669,7 @@ describe('EcsPlatformStack', () => {
       });
       template = Template.fromStack(stack);
 
+      // Platform stack should not create DNS records - that's handled by ApplicationStack
       template.resourceCountIs('AWS::Route53::RecordSet', 0);
     });
   });

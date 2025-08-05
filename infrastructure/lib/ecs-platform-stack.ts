@@ -22,8 +22,9 @@ export interface EcsPlatformStackProps extends cdk.StackProps {
   // Security enhancements
   enableWAF?: boolean;
   enableHTTPS?: boolean;
-  domainName?: string;
   hostedZoneId?: string;
+  baseDomain?: string;
+  appName?: string;
 }
 
 export class EcsPlatformStack extends cdk.Stack {
@@ -37,12 +38,13 @@ export class EcsPlatformStack extends cdk.Stack {
   public readonly logGroup: logs.LogGroup;
   public readonly hostedZone?: route53.IHostedZone;
 
+
   constructor(scope: Construct, id: string, props: EcsPlatformStackProps) {
     super(scope, id, props);
 
     // Validate configuration
-    if (props.enableHTTPS && !props.domainName) {
-      throw new Error('Domain name is required when HTTPS is enabled');
+    if (props.enableHTTPS && (!props.baseDomain || !props.appName)) {
+      throw new Error('Base domain and app name are required when HTTPS is enabled');
     }
 
     // Import VPC and subnets
@@ -68,15 +70,15 @@ export class EcsPlatformStack extends cdk.Stack {
     this.repository = this.createEcrRepository(props);
 
     // Create Route53 Hosted Zone (if domain provided)
-    if (props.domainName && props.hostedZoneId) {
+    if (props.baseDomain && props.hostedZoneId) {
       this.hostedZone = route53.HostedZone.fromHostedZoneAttributes(this, 'HostedZone', {
         hostedZoneId: props.hostedZoneId,
-        zoneName: props.domainName,
+        zoneName: props.baseDomain, // Use base domain for hosted zone
       });
     }
 
     // Create SSL certificate (if HTTPS enabled)
-    if (props.enableHTTPS && props.domainName) {
+    if (props.enableHTTPS && props.baseDomain) {
       this.certificate = this.createCertificate(props);
     }
 
@@ -89,10 +91,7 @@ export class EcsPlatformStack extends cdk.Stack {
       this.httpsListener = this.createHttpsListener();
     }
 
-    // Create Route53 DNS record (if hosted zone exists)
-    if (this.hostedZone && props.domainName) {
-      this.createDnsRecord(props);
-    }
+    // Note: Route53 DNS records are now managed by ApplicationStack
 
     // Create WAF (if enabled)
     if (props.enableWAF) {
@@ -173,13 +172,14 @@ export class EcsPlatformStack extends cdk.Stack {
   }
 
   private createCertificate(props: EcsPlatformStackProps): certificatemanager.ICertificate {
-    if (!props.domainName) {
-      throw new Error('Domain name is required when HTTPS is enabled');
+    // baseDomain is guaranteed to exist due to constructor validation
+    if (!props.baseDomain) {
+      throw new Error('Base domain is required for certificate creation');
     }
-
+    
     const certificate = new certificatemanager.Certificate(this, 'SSLCertificate', {
-      domainName: props.domainName,
-      subjectAlternativeNames: [`*.${props.domainName}`],
+      domainName: props.baseDomain,
+      subjectAlternativeNames: [`*.${props.baseDomain}`],
       validation: this.hostedZone 
         ? certificatemanager.CertificateValidation.fromDns(this.hostedZone)
         : certificatemanager.CertificateValidation.fromDns(),
@@ -232,10 +232,11 @@ export class EcsPlatformStack extends cdk.Stack {
   }
 
   private createHttpsListener(): elasticloadbalancingv2.ApplicationListener {
+    // certificate is guaranteed to exist when this method is called
     if (!this.certificate) {
-      throw new Error('Certificate is required for HTTPS listener');
+      throw new Error('Certificate is required for HTTPS listener creation');
     }
-
+    
     const listener = this.loadBalancer.addListener('HttpsListener', {
       port: 443,
       protocol: elasticloadbalancingv2.ApplicationProtocol.HTTPS,
@@ -262,27 +263,6 @@ export class EcsPlatformStack extends cdk.Stack {
     return listener;
   }
 
-  private createDnsRecord(props: EcsPlatformStackProps): void {
-    if (!this.hostedZone || !props.domainName) return;
-
-    // Create A record for the domain
-    new route53.ARecord(this, 'DnsARecord', {
-      zone: this.hostedZone,
-      recordName: props.domainName,
-      target: route53.RecordTarget.fromAlias(
-        new route53targets.LoadBalancerTarget(this.loadBalancer)
-      ),
-    });
-
-    // Create AAAA record for IPv6 (if ALB supports it)
-    new route53.AaaaRecord(this, 'DnsAaaaRecord', {
-      zone: this.hostedZone,
-      recordName: props.domainName,
-      target: route53.RecordTarget.fromAlias(
-        new route53targets.LoadBalancerTarget(this.loadBalancer)
-      ),
-    });
-  }
 
   private createWAF(props: EcsPlatformStackProps): wafv2.CfnWebACL {
     // Create IP sets for rate limiting
@@ -514,19 +494,6 @@ export class EcsPlatformStack extends cdk.Stack {
       });
     }
 
-    // DNS outputs (if domain configured)
-    if (props.domainName) {
-      const protocol = this.certificate ? 'https' : 'http';
-      new cdk.CfnOutput(this, 'ApplicationUrl', {
-        value: `${protocol}://${props.domainName}`,
-        description: 'Application URL',
-      });
-    } else {
-      const protocol = this.certificate ? 'https' : 'http';
-      new cdk.CfnOutput(this, 'ApplicationUrl', {
-        value: `${protocol}://${this.loadBalancer.loadBalancerDnsName}`,
-        description: 'Application URL',
-      });
-    }
+    // ALB DNS output already created above - removing duplicate
   }
 }

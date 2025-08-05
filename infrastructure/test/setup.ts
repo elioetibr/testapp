@@ -1,10 +1,14 @@
 // Test setup to suppress console warnings during tests
+let consoleWarnMock: jest.SpyInstance;
+
 beforeAll(() => {
   // Mock console.warn to reduce noise from SOPS fallback messages
-  jest.spyOn(console, 'warn').mockImplementation(() => {});
+  consoleWarnMock = jest.spyOn(console, 'warn').mockImplementation(() => {});
 });
 
 afterAll(() => {
   // Restore console.warn
-  (console.warn as jest.Mock).mockRestore();
+  if (consoleWarnMock) {
+    consoleWarnMock.mockRestore();
+  }
 });

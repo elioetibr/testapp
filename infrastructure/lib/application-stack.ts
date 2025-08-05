@@ -8,6 +8,8 @@ import * as elasticloadbalancingv2 from 'aws-cdk-lib/aws-elasticloadbalancingv2'
 import * as secretsmanager from 'aws-cdk-lib/aws-secretsmanager';
 import * as cloudwatch from 'aws-cdk-lib/aws-cloudwatch';
 import * as applicationautoscaling from 'aws-cdk-lib/aws-applicationautoscaling';
+import * as route53 from 'aws-cdk-lib/aws-route53';
+import * as route53targets from 'aws-cdk-lib/aws-route53-targets';
 import { Construct } from 'constructs';
 import { SecretsLoader } from './secrets-loader';
 
@@ -51,6 +53,11 @@ export interface ApplicationStackProps extends cdk.StackProps {
   enableReadOnlyRootFilesystem?: boolean;
   // Environment variables
   environmentVariables?: { [key: string]: string };
+  // Domain configuration
+  baseDomain?: string;
+  appName?: string;
+  prId?: string;
+  hostedZoneId?: string;
 }
 
 export class ApplicationStack extends cdk.Stack {
@@ -61,6 +68,25 @@ export class ApplicationStack extends cdk.Stack {
   public readonly scalableTarget: ecs.ScalableTaskCount;
   public readonly appSecrets: secretsmanager.Secret;
   private readonly secretsLoader: SecretsLoader;
+  private hostedZone?: route53.IHostedZone;
+
+  /**
+   * Constructs the domain name dynamically based on app, environment, and PR context
+   */
+  private getDomainName(props: ApplicationStackProps): string | undefined {
+    if (!props.baseDomain || !props.appName) return undefined;
+
+    if (props.prId) {
+      // PR deployments: pr-123-testapp.assessment.elio.eti.br
+      const sanitizedPrId = props.prId.toString().replace(/[^a-z0-9-]/gi, '-').toLowerCase();
+      return `pr-${sanitizedPrId}-${props.appName}.${props.baseDomain}`;
+    } else {
+      // Regular environments
+      return props.environment === 'production'
+        ? `${props.appName}.${props.baseDomain}`                    // testapp.assessment.elio.eti.br
+        : `${props.environment}-${props.appName}.${props.baseDomain}`; // dev-testapp.assessment.elio.eti.br
+    }
+  }
 
   constructor(scope: Construct, id: string, props: ApplicationStackProps) {
     super(scope, id, props);
@@ -154,6 +180,9 @@ export class ApplicationStack extends cdk.Stack {
 
     // Add listener rules
     this.addListenerRules(httpListener, httpsListener);
+
+    // Setup Route53 DNS records (if domain configured)
+    this.setupRoute53(props);
 
     // Create stack outputs
     this.createOutputs(props);
@@ -483,6 +512,44 @@ export class ApplicationStack extends cdk.Stack {
     }
   }
 
+  private setupRoute53(props: ApplicationStackProps): void {
+    const domainName = this.getDomainName(props);
+    if (!domainName || !props.hostedZoneId || !props.baseDomain) return;
+
+    // Import existing hosted zone
+    this.hostedZone = route53.HostedZone.fromHostedZoneAttributes(this, 'HostedZone', {
+      hostedZoneId: props.hostedZoneId,
+      zoneName: props.baseDomain,
+    });
+
+    // Import load balancer for DNS target
+    const loadBalancer = elasticloadbalancingv2.ApplicationLoadBalancer.fromApplicationLoadBalancerAttributes(
+      this, 'ImportedLoadBalancer',
+      {
+        loadBalancerArn: props.loadBalancerArn,
+        securityGroupId: '', // Not needed for DNS record creation
+      }
+    );
+
+    // Create A record for the domain
+    new route53.ARecord(this, 'DnsARecord', {
+      zone: this.hostedZone,
+      recordName: domainName,
+      target: route53.RecordTarget.fromAlias(
+        new route53targets.LoadBalancerTarget(loadBalancer)
+      ),
+    });
+
+    // Create AAAA record for IPv6 (if ALB supports it)
+    new route53.AaaaRecord(this, 'DnsAaaaRecord', {
+      zone: this.hostedZone,
+      recordName: domainName,
+      target: route53.RecordTarget.fromAlias(
+        new route53targets.LoadBalancerTarget(loadBalancer)
+      ),
+    });
+  }
+
   private createOutputs(props: ApplicationStackProps): void {
     // Service outputs
     new cdk.CfnOutput(this, 'ServiceArn', {
@@ -552,5 +619,25 @@ export class ApplicationStack extends cdk.Stack {
       value: (props.memoryLimitMiB || 512).toString(),
       description: 'Task Memory (MiB)',
     });
+
+    // Application URL output
+    const domainName = this.getDomainName(props);
+    if (domainName) {
+      const protocol = props.httpsListenerArn ? 'https' : 'http';
+      new cdk.CfnOutput(this, 'ApplicationUrl', {
+        value: `${protocol}://${domainName}`,
+        description: 'Application URL with custom domain',
+        exportName: `${this.stackName}-ApplicationUrl`,
+      });
+    } else {
+      // Fallback to ALB DNS name (imported from platform stack)
+      const albDns = cdk.Fn.importValue(`${props.environment === 'production' ? 'TestApp-Platform-production' : `TestApp-Platform-${props.environment}`}-LoadBalancerDNS`);
+      const protocol = props.httpsListenerArn ? 'https' : 'http';
+      new cdk.CfnOutput(this, 'ApplicationUrl', {
+        value: `${protocol}://${albDns}`,
+        description: 'Application URL (ALB DNS)',
+        exportName: `${this.stackName}-ApplicationUrl`,
+      });
+    }
   }
 }

@@ -38,6 +38,10 @@ export interface ApplicationStackProps extends cdk.StackProps {
     environmentVariables?: {
         [key: string]: string;
     };
+    baseDomain?: string;
+    appName?: string;
+    prId?: string;
+    hostedZoneId?: string;
 }
 export declare class ApplicationStack extends cdk.Stack {
     readonly service: ecs.FargateService;
@@ -47,6 +51,11 @@ export declare class ApplicationStack extends cdk.Stack {
     readonly scalableTarget: ecs.ScalableTaskCount;
     readonly appSecrets: secretsmanager.Secret;
     private readonly secretsLoader;
+    private hostedZone?;
+    /**
+     * Constructs the domain name dynamically based on app, environment, and PR context
+     */
+    private getDomainName;
     constructor(scope: Construct, id: string, props: ApplicationStackProps);
     private createSecretsManagerSecret;
     private createIamRoles;
@@ -57,5 +66,6 @@ export declare class ApplicationStack extends cdk.Stack {
     private configureHealthCheck;
     private createAutoScaling;
     private addListenerRules;
+    private setupRoute53;
     private createOutputs;
 }

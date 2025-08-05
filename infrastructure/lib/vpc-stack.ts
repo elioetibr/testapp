@@ -253,9 +253,8 @@ export class VpcStack extends cdk.Stack {
   }
 
   private createVPCFlowLogs(props: VpcStackProps): void {
-    if (!this.flowLogsBucket) return;
-
     // Create VPC Flow Logs for entire VPC
+    // Note: this.flowLogsBucket is guaranteed to exist when this method is called
     new ec2.FlowLog(this, 'VPCFlowLog', {
       resourceType: ec2.FlowLogResourceType.fromVpc(this.vpc),
       destination: ec2.FlowLogDestination.toS3(this.flowLogsBucket, 'vpc-flow-logs/'),
@@ -301,6 +300,23 @@ export class VpcStack extends cdk.Stack {
       description: 'Private Subnet IDs',
       exportName: `${this.stackName}-PrivateSubnetIds`,
     });
+
+    // Export individual private subnet IDs for PR deployments
+    if (this.privateSubnets.length > 0) {
+      new cdk.CfnOutput(this, 'PrivateSubnet1Id', {
+        value: this.privateSubnets[0].subnetId,
+        description: 'Private Subnet 1 ID',
+        exportName: `${this.stackName}-PrivateSubnet1Id`,
+      });
+    }
+    
+    if (this.privateSubnets.length > 1) {
+      new cdk.CfnOutput(this, 'PrivateSubnet2Id', {
+        value: this.privateSubnets[1].subnetId,
+        description: 'Private Subnet 2 ID',
+        exportName: `${this.stackName}-PrivateSubnet2Id`,
+      });
+    }
 
     new cdk.CfnOutput(this, 'PublicSubnetIds', {
       value: this.publicSubnets.map(subnet => subnet.subnetId).join(','),

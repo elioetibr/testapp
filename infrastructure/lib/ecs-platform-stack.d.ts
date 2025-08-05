@@ -16,8 +16,9 @@ export interface EcsPlatformStackProps extends cdk.StackProps {
     repositoryName?: string;
     enableWAF?: boolean;
     enableHTTPS?: boolean;
-    domainName?: string;
     hostedZoneId?: string;
+    baseDomain?: string;
+    appName?: string;
 }
 export declare class EcsPlatformStack extends cdk.Stack {
     readonly cluster: ecs.Cluster;
@@ -37,7 +38,6 @@ export declare class EcsPlatformStack extends cdk.Stack {
     private createApplicationLoadBalancer;
     private createHttpListener;
     private createHttpsListener;
-    private createDnsRecord;
     private createWAF;
     private associateWAFWithALB;
     private createOutputs;

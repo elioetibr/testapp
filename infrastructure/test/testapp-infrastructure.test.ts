@@ -655,4 +655,42 @@ describe('TestAppInfrastructureStack', () => {
       }
     }
   });
+
+  test('throws error when HTTPS enabled but no domain provided', () => {
+    expect(() => {
+      new TestAppInfrastructureStack(app, 'HttpsValidationTestStack', {
+        environment: 'test',
+        enableIPv6: false,
+        enableHANatGateways: false,
+        maxAzs: 2,
+        natGateways: 1,
+        desiredCount: 1,
+        cpu: 256,
+        memoryLimitMiB: 512,
+        enableHTTPS: true,
+        // domainName intentionally omitted to test validation
+      });
+    }).toThrow('A domain name and zone is required when using the HTTPS protocol');
+  });
+
+  test('handles SOPS error gracefully and creates empty secret', () => {
+    // This test covers the SOPS error handling path
+    const stack = new TestAppInfrastructureStack(app, 'SopsErrorTestStack', {
+      environment: 'test',
+      enableIPv6: false,
+      enableHANatGateways: false,
+      maxAzs: 2,
+      natGateways: 1,
+      desiredCount: 1,
+      cpu: 256,
+      memoryLimitMiB: 512,
+    });
+
+    const template = Template.fromStack(stack);
+
+    // Should create secrets manager secret even if SOPS fails
+    template.hasResourceProperties('AWS::SecretsManager::Secret', {
+      Name: 'testapp-test-secrets',
+    });
+  });
 });
