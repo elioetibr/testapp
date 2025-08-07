@@ -774,11 +774,14 @@ jobs:
             gh release create v${{ steps.gitversion.outputs.semVer }} --generate-notes --verify-tag --latest
           fi
 
-  deploy-infrastructure:
+  deploy-development:
     name: Deploy Infrastructure
     runs-on: ${{ vars.RUNS_ON }}
     needs: [build, infrastructure-test]
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    concurrency:
+      group: deploy-development-${{ github.ref }}
+      cancel-in-progress: false
     environment: 
       name: development
       url: ${{ steps.deploy.outputs.application_url }}
@@ -930,7 +933,7 @@ jobs:
   production-approval:
     name: 'Production Deployment Approval'
     runs-on: ${{ vars.RUNS_ON }}
-    needs: [deploy-infrastructure]
+    needs: [deploy-development]
     if: github.ref == 'refs/heads/main' && github.event_name == 'push' && contains(github.event.head_commit.message, '[deploy-prod]')
     environment:
       name: production-approval
@@ -1045,8 +1048,11 @@ jobs:
   deploy-production:
     name: Deploy to Production
     runs-on: ${{ vars.RUNS_ON }}
-    needs: [deploy-infrastructure, production-approval]
+    needs: [deploy-development, production-approval]
     if: github.ref == 'refs/heads/main' && github.event_name == 'push' && contains(github.event.head_commit.message, '[deploy-prod]')
+    concurrency:
+      group: deploy-production-${{ github.ref }}
+      cancel-in-progress: false    
     environment: 
       name: production
       url: ${{ steps.deploy-prod.outputs.application_url }}

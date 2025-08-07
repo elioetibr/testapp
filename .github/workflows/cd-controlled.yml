@@ -221,7 +221,7 @@ jobs:
             For urgent deployments, contact: ${{ vars.EMERGENCY_CONTACT || 'On-call team' }}
 
   # 🏗️ Infrastructure Deployment
-  deploy-infrastructure:
+  deploy-development:
     name: 🏗️ Deploy Infrastructure
     runs-on: ${{ vars.RUNS_ON || 'ubuntu-latest' }}
     needs: [pre-deployment-validation, production-approval]
@@ -374,13 +374,13 @@ jobs:
   deploy-application:
     name: 🚀 Deploy Application
     runs-on: ${{ vars.RUNS_ON || 'ubuntu-latest' }}
-    needs: [pre-deployment-validation, production-approval, deploy-infrastructure]
+    needs: [pre-deployment-validation, production-approval, deploy-development]
     if: |
       always() && 
       needs.pre-deployment-validation.outputs.validation-passed == 'true' &&
       ((github.event.inputs.deployment_type || github.event.client_payload.deployment_type || 'full') == 'application-only' || (github.event.inputs.deployment_type || github.event.client_payload.deployment_type || 'full') == 'full') &&
       ((github.event.inputs.environment || github.event.client_payload.environment || 'dev') != 'production' || needs.production-approval.result == 'success') &&
-      ((github.event.inputs.deployment_type || github.event.client_payload.deployment_type || 'full') == 'application-only' || needs.deploy-infrastructure.result == 'success')
+      ((github.event.inputs.deployment_type || github.event.client_payload.deployment_type || 'full') == 'application-only' || needs.deploy-development.result == 'success')
     environment:
       name: ${{ github.event.inputs.environment || github.event.client_payload.environment || 'dev' }}
       
@@ -464,11 +464,11 @@ jobs:
   post-deployment-validation:
     name: 🔍 Post-deployment Validation
     runs-on: ${{ vars.RUNS_ON || 'ubuntu-latest' }}
-    needs: [deploy-infrastructure, deploy-application]
+    needs: [deploy-development, deploy-application]
     if: |
       always() && 
-      env.DRY_RUN != 'true' &&
-      (needs.deploy-infrastructure.result == 'success' || needs.deploy-application.result == 'success')
+      (github.event.inputs.dry_run || github.event.client_payload.dry_run || 'false') != 'true' &&
+      (needs.deploy-development.result == 'success' || needs.deploy-application.result == 'success')
       
     steps:
       - name: Configure AWS credentials
@@ -530,7 +530,7 @@ jobs:
   deployment-summary:
     name: 📊 Deployment Summary
     runs-on: ubuntu-latest
-    needs: [pre-deployment-validation, production-approval, deploy-infrastructure, deploy-application, post-deployment-validation]
+    needs: [pre-deployment-validation, production-approval, deploy-development, deploy-application, post-deployment-validation]
     if: always()
     
     steps:
@@ -554,7 +554,7 @@ jobs:
           echo "|-------|--------|----------|" >> $GITHUB_STEP_SUMMARY
           echo "| **Pre-validation** | ${{ needs.pre-deployment-validation.result || 'skipped' }} | - |" >> $GITHUB_STEP_SUMMARY
           echo "| **Production Approval** | ${{ needs.production-approval.result || 'skipped' }} | - |" >> $GITHUB_STEP_SUMMARY
-          echo "| **Infrastructure** | ${{ needs.deploy-infrastructure.result || 'skipped' }} | - |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Infrastructure** | ${{ needs.deploy-development.result || 'skipped' }} | - |" >> $GITHUB_STEP_SUMMARY
           echo "| **Application** | ${{ needs.deploy-application.result || 'skipped' }} | - |" >> $GITHUB_STEP_SUMMARY
           echo "| **Post-validation** | ${{ needs.post-deployment-validation.result || 'skipped' }} | - |" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY

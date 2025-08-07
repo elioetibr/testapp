@@ -296,7 +296,7 @@ jobs:
     name: 🔧 Auto Remediation
     runs-on: ubuntu-latest
     needs: [drift-detection, compliance-check]
-    if: env.AUTO_REMEDIATE == 'true' && (needs.drift-detection.outputs.drift-detected == 'true' || needs.compliance-check.outputs.compliance-violations != '0')
+    if: (inputs.auto_remediate || 'false') == 'true' && (needs.drift-detection.outputs.drift-detected == 'true' || needs.compliance-check.outputs.compliance-violations != '0')
     
     steps:
       - name: Checkout code

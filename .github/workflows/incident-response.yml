@@ -332,10 +332,10 @@ jobs:
     needs: incident-assessment
     if: |
       needs.incident-assessment.outputs.requires-rollback == 'true' && 
-      (env.AUTO_ROLLBACK == 'true' || env.SEVERITY == 'critical')
+      ((inputs.auto_rollback || github.event.client_payload.auto_rollback || 'false') == 'true' || (inputs.severity || github.event.client_payload.severity || 'medium') == 'critical')
     environment:
-      name: ${{ env.AFFECTED_ENV }}
-      
+      name: ${{ inputs.environment || github.event.client_payload.environment }}
+    
     steps:
       - name: Checkout code
         uses: actions/checkout@v4

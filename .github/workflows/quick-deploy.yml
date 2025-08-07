@@ -35,7 +35,7 @@ jobs:
     name: 🚀 Quick Container Deploy
     runs-on: ${{ vars.RUNS_ON || 'ubuntu-latest' }}
     environment:
-      name: ${{ env.ENVIRONMENT }}
+      name: ${{ github.event.inputs.environment }}
       
     steps:
       - name: Configure AWS credentials

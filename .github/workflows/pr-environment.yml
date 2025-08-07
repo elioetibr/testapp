@@ -238,22 +238,25 @@ jobs:
       github.event.issue.pull_request &&
       contains(github.event.comment.body, '/destroy') &&
       github.event.comment.author_association == 'COLLABORATOR'
+    outputs:
+      should-destroy: ${{ steps.check-command.outputs.destroy }}
     
     steps:
-      - name: Destroy PR environment
+      - name: Check destroy command
+        id: check-command
         run: |
           echo "🗑️ Destroying PR environment as requested by @${{ github.event.comment.user.login }}"
-          # This will trigger the cleanup job
-          echo "destroy=true" >> $GITHUB_ENV
+          echo "destroy=true" >> $GITHUB_OUTPUT
 
   # 🗑️ Cleanup PR Environment
   cleanup-pr-environment:
     name: 🗑️ Cleanup PR Environment
     runs-on: ${{ vars.RUNS_ON || 'ubuntu-latest' }}
+    needs: [handle-pr-commands]
     if: |
       always() && (
         (github.event_name == 'pull_request' && github.event.action == 'closed') ||
-        env.destroy == 'true'
+        needs.handle-pr-commands.outputs.should-destroy == 'true'
       )
     
     steps:

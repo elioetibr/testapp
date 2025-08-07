@@ -51,7 +51,7 @@ jobs:
   infrastructure-security:
     name: 🔍 Infrastructure Security
     runs-on: ${{ vars.RUNS_ON || 'ubuntu-latest' }}
-    if: env.SCAN_SCOPE != 'application-only'
+    if: (inputs.scan_scope || (github.event.schedule && contains(github.event.schedule, '0 1 * * 1') && 'comprehensive' || 'standard')) != 'application-only'
     outputs:
       vulnerabilities-count: ${{ steps.infra-scan.outputs.vulnerabilities_count }}
       critical-issues: ${{ steps.infra-scan.outputs.critical_issues }}
@@ -212,7 +212,7 @@ jobs:
   application-security:
     name: 🐍 Application Security
     runs-on: ${{ vars.RUNS_ON || 'ubuntu-latest' }}
-    if: env.SCAN_SCOPE != 'infrastructure-only'
+    if: (inputs.scan_scope || (github.event.schedule && contains(github.event.schedule, '0 1 * * 1') && 'comprehensive' || 'standard')) != 'infrastructure-only'
     outputs:
       vulnerabilities-count: ${{ steps.app-scan.outputs.vulnerabilities_count }}
       critical-issues: ${{ steps.app-scan.outputs.critical_issues }}
@@ -369,7 +369,7 @@ jobs:
   container-security:
     name: 🔐 Container Security
     runs-on: ${{ vars.RUNS_ON || 'ubuntu-latest' }}
-    if: env.SCAN_SCOPE == 'comprehensive' || env.SCAN_SCOPE == 'standard'
+    if: (inputs.scan_scope || (github.event.schedule && contains(github.event.schedule, '0 1 * * 1') && 'comprehensive' || 'standard')) == 'comprehensive' || (inputs.scan_scope || (github.event.schedule && contains(github.event.schedule, '0 1 * * 1') && 'comprehensive' || 'standard')) == 'standard'
     outputs:
       vulnerabilities-count: ${{ steps.container-scan.outputs.vulnerabilities_count }}
       critical-issues: ${{ steps.container-scan.outputs.critical_issues }}
@@ -481,7 +481,7 @@ jobs:
     name: 📊 Compliance Reporting
     runs-on: ubuntu-latest
     needs: [infrastructure-security, application-security, container-security]
-    if: always() && env.GENERATE_REPORT == 'true'
+    if: always() && (inputs.generate_report != 'false')
     
     steps:
       - name: Download all artifacts
