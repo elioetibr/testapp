@@ -1,0 +1,434 @@
+name: Infrastructure Destruction
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment to destroy'
+        required: true
+        type: choice
+        options:
+          - dev
+          - production
+          - all-pr-environments
+      
+      confirmation:
+        description: 'Type "DESTROY" to confirm destruction'
+        required: true
+        type: string
+      
+      destroy_ecr:
+        description: 'Also destroy ECR repositories (WARNING: Permanent data loss)'
+        required: false
+        default: false
+        type: boolean
+      
+      destroy_secrets:
+        description: 'Also destroy Secrets Manager secrets (WARNING: Permanent data loss)'
+        required: false
+        default: false
+        type: boolean
+      
+      dry_run:
+        description: 'Perform dry run (show what would be destroyed)'
+        required: false
+        default: true
+        type: boolean
+
+env:
+  ENVIRONMENT: ${{ github.event.inputs.environment }}
+  CONFIRMATION: ${{ github.event.inputs.confirmation }}
+  DESTROY_ECR: ${{ github.event.inputs.destroy_ecr }}
+  DESTROY_SECRETS: ${{ github.event.inputs.destroy_secrets }}
+  DRY_RUN: ${{ github.event.inputs.dry_run }}
+
+permissions:
+  id-token: write
+  contents: read
+  issues: write
+
+jobs:
+  # 🛡️ Destruction Validation
+  destruction-validation:
+    name: 🛡️ Destruction Validation
+    runs-on: ubuntu-latest
+    outputs:
+      validation-passed: ${{ steps.validation.outputs.passed }}
+      is-production: ${{ steps.validation.outputs.is-production }}
+      
+    steps:
+      - name: Validate destruction request
+        id: validation
+        run: |
+          echo "## 🛡️ **INFRASTRUCTURE DESTRUCTION VALIDATION**" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "⚠️ **WARNING: This action will PERMANENTLY DESTROY infrastructure!**" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          # Validate confirmation
+          if [[ "${{ env.CONFIRMATION }}" != "DESTROY" ]]; then
+            echo "❌ **VALIDATION FAILED**: Confirmation must be exactly 'DESTROY'" >> $GITHUB_STEP_SUMMARY
+            echo "**You entered:** '${{ env.CONFIRMATION }}'" >> $GITHUB_STEP_SUMMARY
+            echo "passed=false" >> $GITHUB_OUTPUT
+            exit 1
+          fi
+          
+          # Validate environment
+          if [[ ! "${{ env.ENVIRONMENT }}" =~ ^(dev|production|all-pr-environments)$ ]]; then
+            echo "❌ **VALIDATION FAILED**: Invalid environment '${{ env.ENVIRONMENT }}'" >> $GITHUB_STEP_SUMMARY
+            echo "passed=false" >> $GITHUB_OUTPUT
+            exit 1
+          fi
+          
+          # Check if production
+          IS_PRODUCTION="false"
+          if [[ "${{ env.ENVIRONMENT }}" == "production" ]]; then
+            IS_PRODUCTION="true"
+            echo "🚨 **PRODUCTION DESTRUCTION DETECTED**" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "**This will destroy your PRODUCTION environment!**" >> $GITHUB_STEP_SUMMARY
+            echo "- All production data will be lost" >> $GITHUB_STEP_SUMMARY
+            echo "- Production services will become unavailable" >> $GITHUB_STEP_SUMMARY
+            echo "- This action is IRREVERSIBLE" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          echo "is-production=$IS_PRODUCTION" >> $GITHUB_OUTPUT
+          
+          # Show what will be destroyed
+          echo "### 📋 **Destruction Plan**" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Parameter | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|-----------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| **Target Environment** | ${{ env.ENVIRONMENT }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| **ECR Repositories** | ${{ env.DESTROY_ECR == 'true' && '🗑️ DESTROY' || '✅ PRESERVE' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Secrets Manager** | ${{ env.DESTROY_SECRETS == 'true' && '🗑️ DESTROY' || '✅ PRESERVE' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Dry Run** | ${{ env.DRY_RUN == 'true' && '🔍 SIMULATE' || '💥 EXECUTE' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Initiated By** | ${{ github.actor }} |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          if [[ "${{ env.DRY_RUN }}" == "true" ]]; then
+            echo "✅ **DRY RUN MODE**: No resources will be destroyed" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "💥 **LIVE DESTRUCTION**: Resources WILL BE PERMANENTLY DELETED" >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          echo "passed=true" >> $GITHUB_OUTPUT
+
+  # 🎛️ Production Destruction Approval
+  production-destruction-approval:
+    name: 🎛️ Production Destruction Approval
+    runs-on: ubuntu-latest
+    needs: destruction-validation
+    if: |
+      needs.destruction-validation.outputs.validation-passed == 'true' &&
+      needs.destruction-validation.outputs.is-production == 'true' &&
+      env.DRY_RUN != 'true'
+    environment:
+      name: production-destruction-approval
+      
+    steps:
+      - name: Generate GitHub App Token
+        uses: actions/create-github-app-token@v2
+        id: app-token
+        with:
+          app-id: ${{ vars.APP_ID }}
+          private-key: ${{ secrets.PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+
+      - name: Production Destruction Approval
+        uses: trstringer/manual-approval@v1
+        timeout-minutes: 30
+        with:
+          secret: ${{ steps.app-token.outputs.token }}
+          approvers: ${{ vars.PRODUCTION_APPROVERS || github.repository_owner }}
+          minimum-approvals: 2  # Require TWO approvals for production destruction
+          issue-title: "🚨 CRITICAL: Production Infrastructure Destruction"
+          issue-body: |
+            # 🚨 **CRITICAL: PRODUCTION INFRASTRUCTURE DESTRUCTION**
+            
+            ## ⚠️ **DANGER ZONE - READ CAREFULLY**
+            
+            Someone has requested to **PERMANENTLY DESTROY** the production infrastructure.
+            
+            **This action is IRREVERSIBLE and will result in:**
+            - 💥 **Complete production outage**
+            - 🗑️ **Loss of all production data** (if secrets/ECR destroyed)
+            - 💸 **Potential business impact**
+            - 🔧 **Extended recovery time**
+            
+            ## 📋 **Destruction Request Details**
+            
+            | Parameter | Value |
+            |-----------|--------|
+            | **Requestor** | ${{ github.actor }} |
+            | **Environment** | 🏭 **PRODUCTION** |
+            | **ECR Destruction** | ${{ env.DESTROY_ECR == 'true' && '💥 YES - IMAGES WILL BE LOST' || '✅ NO - IMAGES PRESERVED' }} |
+            | **Secrets Destruction** | ${{ env.DESTROY_SECRETS == 'true' && '💥 YES - SECRETS WILL BE LOST' || '✅ NO - SECRETS PRESERVED' }} |
+            | **Workflow Run** | [${{ github.run_id }}](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}) |
+            
+            ## 🛡️ **SAFETY CHECKLIST**
+            
+            **Before approving, VERIFY:**
+            
+            - [ ] **Business Approval**: Business stakeholders have approved this destruction
+            - [ ] **Backup Verification**: All critical data has been backed up
+            - [ ] **Impact Assessment**: Impact on users and services is understood
+            - [ ] **Communication Plan**: Users/customers have been notified
+            - [ ] **Recovery Plan**: Plan to rebuild environment is documented
+            - [ ] **Alternative Environment**: Alternative environment is available if needed
+            - [ ] **Timing**: Destruction timing is appropriate (off-hours, maintenance window)
+            - [ ] **Emergency Contacts**: On-call team is aware and ready
+            
+            ## ✅ **APPROVAL REQUIREMENTS**
+            
+            **This requires 2 approvals from:** ${{ vars.PRODUCTION_APPROVERS || github.repository_owner }}
+            
+            To **approve**: Comment `approved`, `approve`, or `✅`
+            To **reject**: Comment `rejected`, `reject`, or `❌`
+            
+            ## 🆘 **EMERGENCY STOP**
+            
+            If this destruction is initiated by mistake or malicious activity:
+            1. **DO NOT APPROVE**
+            2. Cancel this workflow immediately
+            3. Contact security team: ${{ vars.SECURITY_CONTACT }}
+            4. Review access controls and audit logs
+            
+            ---
+            
+            ### 💀 **REMEMBER: THIS CANNOT BE UNDONE**
+
+  # 🗑️ Destroy Standard Environment
+  destroy-environment:
+    name: 🗑️ Destroy Environment
+    runs-on: ${{ vars.RUNS_ON || 'ubuntu-latest' }}
+    needs: [destruction-validation, production-destruction-approval]
+    if: |
+      always() &&
+      needs.destruction-validation.outputs.validation-passed == 'true' &&
+      env.ENVIRONMENT != 'all-pr-environments' &&
+      (needs.destruction-validation.outputs.is-production != 'true' || needs.production-destruction-approval.result == 'success')
+      
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4.3.1
+        with:
+          role-to-assume: arn:aws:iam::892193016253:role/github-actions-role
+          role-session-name: github-actions-destroy-${{ env.ENVIRONMENT }}
+          aws-region: us-east-1
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: 'npm'
+          cache-dependency-path: infrastructure/package-lock.json
+
+      - name: Build infrastructure
+        run: |
+          cd infrastructure
+          npm ci --prefer-offline
+          npm run build
+
+      - name: Destroy infrastructure (dry run)
+        if: env.DRY_RUN == 'true'
+        run: |
+          cd infrastructure
+          
+          echo "## 🔍 **DRY RUN - Infrastructure Destruction Simulation**" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Environment:** ${{ env.ENVIRONMENT }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          echo "### 🔍 What would be destroyed:" >> $GITHUB_STEP_SUMMARY
+          
+          # Show diffs for each stack
+          echo "#### Application Stack:" >> $GITHUB_STEP_SUMMARY
+          npx cdk diff TestApp-App-${{ env.ENVIRONMENT }} --context environment=${{ env.ENVIRONMENT }} || echo "Stack not found or no changes"
+          
+          echo "#### Platform Stack:" >> $GITHUB_STEP_SUMMARY
+          npx cdk diff TestApp-Platform-${{ env.ENVIRONMENT }} --context environment=${{ env.ENVIRONMENT }} || echo "Stack not found or no changes"
+          
+          echo "#### VPC Stack:" >> $GITHUB_STEP_SUMMARY
+          npx cdk diff TestApp-VPC-${{ env.ENVIRONMENT }} --context environment=${{ env.ENVIRONMENT }} || echo "Stack not found or no changes"
+
+      - name: Destroy infrastructure (live)
+        if: env.DRY_RUN != 'true'
+        run: |
+          cd infrastructure
+          
+          echo "## 💥 **DESTROYING INFRASTRUCTURE FOR ${{ env.ENVIRONMENT }}**" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          # Destroy in reverse dependency order
+          echo "### 1. 🗑️ Destroying Application Stack..." >> $GITHUB_STEP_SUMMARY
+          npx cdk destroy TestApp-App-${{ env.ENVIRONMENT }} --force --context environment=${{ env.ENVIRONMENT }} || {
+            echo "⚠️ Application stack destruction failed or stack doesn't exist" >> $GITHUB_STEP_SUMMARY
+          }
+          
+          echo "### 2. 🗑️ Destroying Platform Stack..." >> $GITHUB_STEP_SUMMARY
+          npx cdk destroy TestApp-Platform-${{ env.ENVIRONMENT }} --force --context environment=${{ env.ENVIRONMENT }} || {
+            echo "⚠️ Platform stack destruction failed or stack doesn't exist" >> $GITHUB_STEP_SUMMARY
+          }
+          
+          echo "### 3. 🗑️ Destroying VPC Stack..." >> $GITHUB_STEP_SUMMARY
+          npx cdk destroy TestApp-VPC-${{ env.ENVIRONMENT }} --force --context environment=${{ env.ENVIRONMENT }} || {
+            echo "⚠️ VPC stack destruction failed or stack doesn't exist" >> $GITHUB_STEP_SUMMARY
+          }
+          
+          echo "### ✅ **Core Infrastructure Destroyed**" >> $GITHUB_STEP_SUMMARY
+
+      - name: Destroy ECR repositories
+        if: env.DRY_RUN != 'true' && env.DESTROY_ECR == 'true'
+        run: |
+          echo "### 🗑️ **Destroying ECR Repositories**" >> $GITHUB_STEP_SUMMARY
+          
+          # Delete ECR repository for this environment
+          aws ecr delete-repository --repository-name testapp-${{ env.ENVIRONMENT }} --force || {
+            echo "⚠️ ECR repository testapp-${{ env.ENVIRONMENT }} not found" >> $GITHUB_STEP_SUMMARY
+          }
+          
+          echo "✅ ECR repositories destroyed" >> $GITHUB_STEP_SUMMARY
+
+      - name: Destroy Secrets Manager secrets
+        if: env.DRY_RUN != 'true' && env.DESTROY_SECRETS == 'true'
+        run: |
+          echo "### 🗑️ **Destroying Secrets Manager Secrets**" >> $GITHUB_STEP_SUMMARY
+          
+          # Delete secrets for this environment
+          aws secretsmanager delete-secret --secret-id testapp-${{ env.ENVIRONMENT }}-app-secrets --force-delete-without-recovery || {
+            echo "⚠️ Secret testapp-${{ env.ENVIRONMENT }}-app-secrets not found" >> $GITHUB_STEP_SUMMARY
+          }
+          
+          echo "✅ Secrets Manager secrets destroyed" >> $GITHUB_STEP_SUMMARY
+
+  # 🧹 Cleanup All PR Environments
+  cleanup-all-pr-environments:
+    name: 🧹 Cleanup All PR Environments
+    runs-on: ${{ vars.RUNS_ON || 'ubuntu-latest' }}
+    needs: destruction-validation
+    if: |
+      needs.destruction-validation.outputs.validation-passed == 'true' &&
+      env.ENVIRONMENT == 'all-pr-environments'
+      
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4.3.1
+        with:
+          role-to-assume: arn:aws:iam::892193016253:role/github-actions-role
+          role-session-name: github-actions-cleanup-prs
+          aws-region: us-east-1
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: 'npm'
+          cache-dependency-path: infrastructure/package-lock.json
+
+      - name: Build infrastructure
+        run: |
+          cd infrastructure
+          npm ci --prefer-offline
+          npm run build
+
+      - name: Find and cleanup PR environments
+        run: |
+          cd infrastructure
+          
+          echo "## 🧹 **Cleaning Up All PR Environments**" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          # List all CloudFormation stacks that match PR pattern
+          PR_STACKS=$(aws cloudformation list-stacks --stack-status-filter CREATE_COMPLETE UPDATE_COMPLETE --query 'StackSummaries[?contains(StackName, `TestApp-`) && contains(StackName, `-pr`)].StackName' --output text)
+          
+          if [[ -z "$PR_STACKS" ]]; then
+            echo "✅ No PR environments found to cleanup" >> $GITHUB_STEP_SUMMARY
+            exit 0
+          fi
+          
+          echo "**Found PR environments:**" >> $GITHUB_STEP_SUMMARY
+          echo "$PR_STACKS" | tr '\t' '\n' | while read stack; do
+            echo "- $stack" >> $GITHUB_STEP_SUMMARY
+          done
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          if [[ "${{ env.DRY_RUN }}" == "true" ]]; then
+            echo "🔍 **DRY RUN**: Would destroy the above stacks" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "### 💥 **Destroying PR Stacks...**" >> $GITHUB_STEP_SUMMARY
+            
+            # Group stacks by PR number and destroy in correct order
+            echo "$PR_STACKS" | tr '\t' '\n' | grep -E "TestApp-App-pr[0-9]+" | while read stack; do
+              echo "Destroying $stack..." >> $GITHUB_STEP_SUMMARY
+              npx cdk destroy $stack --force || echo "Failed to destroy $stack" >> $GITHUB_STEP_SUMMARY
+            done
+            
+            echo "$PR_STACKS" | tr '\t' '\n' | grep -E "TestApp-Platform-pr[0-9]+" | while read stack; do
+              echo "Destroying $stack..." >> $GITHUB_STEP_SUMMARY
+              npx cdk destroy $stack --force || echo "Failed to destroy $stack" >> $GITHUB_STEP_SUMMARY
+            done
+            
+            echo "$PR_STACKS" | tr '\t' '\n' | grep -E "TestApp-VPC-pr[0-9]+" | while read stack; do
+              echo "Destroying $stack..." >> $GITHUB_STEP_SUMMARY
+              npx cdk destroy $stack --force || echo "Failed to destroy $stack" >> $GITHUB_STEP_SUMMARY
+            done
+            
+            echo "### ✅ **PR Environments Cleanup Complete**" >> $GITHUB_STEP_SUMMARY
+          fi
+
+  # 📊 Destruction Summary
+  destruction-summary:
+    name: 📊 Destruction Summary
+    runs-on: ubuntu-latest
+    needs: [destruction-validation, production-destruction-approval, destroy-environment, cleanup-all-pr-environments]
+    if: always()
+    
+    steps:
+      - name: Generate destruction summary
+        run: |
+          echo "# 💥 **INFRASTRUCTURE DESTRUCTION SUMMARY**" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          # Determine overall result
+          if [[ "${{ needs.destruction-validation.outputs.validation-passed }}" != "true" ]]; then
+            echo "## ❌ **DESTRUCTION BLOCKED - VALIDATION FAILED**" >> $GITHUB_STEP_SUMMARY
+          elif [[ "${{ env.DRY_RUN }}" == "true" ]]; then
+            echo "## 🔍 **DRY RUN COMPLETED**" >> $GITHUB_STEP_SUMMARY
+            echo "✅ No resources were actually destroyed" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "## 💀 **DESTRUCTION COMPLETED**" >> $GITHUB_STEP_SUMMARY
+            echo "⚠️ Resources have been permanently destroyed" >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "## 📋 **Operation Details**" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Parameter | Value | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|-----------|-------|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| **Environment** | ${{ env.ENVIRONMENT }} | 🎯 |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Dry Run** | ${{ env.DRY_RUN }} | ${{ env.DRY_RUN == 'true' && '🔍' || '💥' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| **ECR Destruction** | ${{ env.DESTROY_ECR }} | ${{ env.DESTROY_ECR == 'true' && '💥' || '✅' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Secrets Destruction** | ${{ env.DESTROY_SECRETS }} | ${{ env.DESTROY_SECRETS == 'true' && '💥' || '✅' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Initiated By** | ${{ github.actor }} | 👤 |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "## 🚀 **Job Results**" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Stage | Result |" >> $GITHUB_STEP_SUMMARY
+          echo "|-------|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| **Validation** | ${{ needs.destruction-validation.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Production Approval** | ${{ needs.production-destruction-approval.result || 'skipped' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Environment Destruction** | ${{ needs.destroy-environment.result || 'skipped' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| **PR Cleanup** | ${{ needs.cleanup-all-pr-environments.result || 'skipped' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### 🔗 **References**" >> $GITHUB_STEP_SUMMARY
+          echo "- **Workflow Run:** https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **AWS Console:** [CloudFormation](https://console.aws.amazon.com/cloudformation/)" >> $GITHUB_STEP_SUMMARY

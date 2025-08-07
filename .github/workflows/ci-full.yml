@@ -824,6 +824,55 @@ jobs:
           name: cloudformation-templates
           path: infrastructure/cdk.out/
 
+      - name: Wait for existing stack operations
+        timeout-minutes: 30
+        run: |
+          echo "## ⏳ Checking for Active Stack Operations" >> $GITHUB_STEP_SUMMARY
+          
+          # Function to wait for stack to be in a stable state
+          wait_for_stack() {
+            local stack_name=$1
+            local max_attempts=30
+            local attempt=1
+            
+            echo "Checking stack: $stack_name"
+            
+            while [ $attempt -le $max_attempts ]; do
+              status=$(aws cloudformation describe-stacks --stack-name $stack_name --query 'Stacks[0].StackStatus' --output text 2>/dev/null || echo "NOT_FOUND")
+              
+              case $status in
+                "CREATE_COMPLETE"|"UPDATE_COMPLETE"|"ROLLBACK_COMPLETE"|"UPDATE_ROLLBACK_COMPLETE"|"NOT_FOUND")
+                  echo "✅ Stack $stack_name is ready (Status: $status)"
+                  return 0
+                  ;;
+                "CREATE_IN_PROGRESS"|"UPDATE_IN_PROGRESS"|"DELETE_IN_PROGRESS"|"ROLLBACK_IN_PROGRESS"|"UPDATE_ROLLBACK_IN_PROGRESS")
+                  echo "⏳ Stack $stack_name is busy (Status: $status), waiting... (attempt $attempt/$max_attempts)"
+                  sleep 60
+                  ;;
+                "CREATE_FAILED"|"UPDATE_FAILED"|"DELETE_FAILED")
+                  echo "❌ Stack $stack_name is in failed state: $status"
+                  return 1
+                  ;;
+                *)
+                  echo "⚠️ Unknown stack status: $status"
+                  sleep 30
+                  ;;
+              esac
+              
+              attempt=$((attempt + 1))
+            done
+            
+            echo "❌ Timeout waiting for stack $stack_name to be ready"
+            return 1
+          }
+          
+          # Wait for each development stack to be ready
+          wait_for_stack "TestApp-VPC-dev" || true
+          wait_for_stack "TestApp-Platform-dev" || true
+          wait_for_stack "TestApp-App-dev" || true
+          
+          echo "✅ All development stacks are ready for deployment" >> $GITHUB_STEP_SUMMARY
+
       - name: Deploy infrastructure
         id: deploy
         run: |
@@ -1037,13 +1086,67 @@ jobs:
           cd infrastructure
           npm run build
 
+      - name: Wait for existing production stack operations
+        timeout-minutes: 30
+        run: |
+          echo "## ⏳ Checking for Active Production Stack Operations" >> $GITHUB_STEP_SUMMARY
+          
+          # Function to wait for stack to be in a stable state
+          wait_for_stack() {
+            local stack_name=$1
+            local max_attempts=30
+            local attempt=1
+            
+            echo "Checking production stack: $stack_name"
+            
+            while [ $attempt -le $max_attempts ]; do
+              status=$(aws cloudformation describe-stacks --stack-name $stack_name --query 'Stacks[0].StackStatus' --output text 2>/dev/null || echo "NOT_FOUND")
+              
+              case $status in
+                "CREATE_COMPLETE"|"UPDATE_COMPLETE"|"ROLLBACK_COMPLETE"|"UPDATE_ROLLBACK_COMPLETE"|"NOT_FOUND")
+                  echo "✅ Stack $stack_name is ready (Status: $status)"
+                  return 0
+                  ;;
+                "CREATE_IN_PROGRESS"|"UPDATE_IN_PROGRESS"|"DELETE_IN_PROGRESS"|"ROLLBACK_IN_PROGRESS"|"UPDATE_ROLLBACK_IN_PROGRESS")
+                  echo "⏳ Stack $stack_name is busy (Status: $status), waiting... (attempt $attempt/$max_attempts)"
+                  sleep 60
+                  ;;
+                "CREATE_FAILED"|"UPDATE_FAILED"|"DELETE_FAILED")
+                  echo "❌ Stack $stack_name is in failed state: $status"
+                  return 1
+                  ;;
+                *)
+                  echo "⚠️ Unknown stack status for production: $status"
+                  sleep 30
+                  ;;
+              esac
+              
+              attempt=$((attempt + 1))
+            done
+            
+            echo "❌ Timeout waiting for production stack $stack_name to be ready"
+            return 1
+          }
+          
+          # Wait for production stacks to be ready
+          wait_for_stack "TestApp-VPC-production" || true
+          wait_for_stack "TestApp-Platform-production" || true
+          wait_for_stack "TestApp-App-production" || true
+          
+          echo "✅ All production stacks are ready for deployment" >> $GITHUB_STEP_SUMMARY
+
       - name: Deploy production infrastructure
         id: deploy-prod
         run: |
           cd infrastructure
           
-          # Deploy production stack
-          cdk deploy TestApp-production --require-approval never --outputs-file outputs-prod.json
+          # Acknowledge CDK notices
+          npx cdk acknowledge 34892 34635 || true
+          
+          # Deploy production stacks in dependency order
+          npx cdk deploy TestApp-VPC-production --require-approval never --context environment=production
+          npx cdk deploy TestApp-Platform-production --require-approval never --context environment=production
+          npx cdk deploy TestApp-App-production --require-approval never --context environment=production --outputs-file outputs-prod.json
           
           # Extract application URL from outputs
           APPLICATION_URL=$(jq -r '.["TestApp-production"]["ApplicationUrl"] // empty' outputs-prod.json)

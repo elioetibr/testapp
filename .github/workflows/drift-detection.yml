@@ -1,0 +1,544 @@
+name: Infrastructure Drift Detection & Compliance
+
+on:
+  schedule:
+    # Run daily at 6 AM UTC
+    - cron: '0 6 * * *'
+    # Run weekly comprehensive check on Sundays at 2 AM UTC  
+    - cron: '0 2 * * 0'
+    
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment to check'
+        required: false
+        type: choice
+        default: 'all'
+        options: ['all', 'dev', 'production']
+      check_type:
+        description: 'Type of drift check'
+        required: false
+        type: choice
+        default: 'standard'
+        options: ['quick', 'standard', 'comprehensive', 'compliance-only']
+      auto_remediate:
+        description: 'Attempt automatic remediation'
+        required: false
+        type: boolean
+        default: false
+
+env:
+  ENVIRONMENTS: ${{ inputs.environment == 'all' && 'dev,production' || inputs.environment || 'dev,production' }}
+  CHECK_TYPE: ${{ inputs.check_type || (github.event.schedule && contains(github.event.schedule, '0 2 * * 0') && 'comprehensive' || 'standard') }}
+  AUTO_REMEDIATE: ${{ inputs.auto_remediate || 'false' }}
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+  id-token: write
+
+jobs:
+  # 🔍 Infrastructure Drift Detection Matrix
+  drift-detection:
+    name: 🔍 Drift Detection (${{ matrix.environment }})
+    runs-on: ${{ vars.RUNS_ON || 'ubuntu-latest' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        environment: ${{ fromJSON(format('[{0}]', env.ENVIRONMENTS)) }}
+    outputs:
+      drift-detected: ${{ steps.drift-check.outputs.drift_detected }}
+      drift-summary: ${{ steps.drift-check.outputs.drift_summary }}
+      
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4.3.1
+        with:
+          role-to-assume: arn:aws:iam::892193016253:role/github-actions-role
+          role-session-name: github-actions
+          aws-region: us-east-1
+
+      - name: Setup Node.js for CDK
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: 'npm'
+          cache-dependency-path: infrastructure/package-lock.json
+
+      - name: Install CDK dependencies
+        run: |
+          cd infrastructure
+          npm ci --prefer-offline
+
+      - name: Acknowledge CDK notices
+        run: |
+          cd infrastructure
+          npx cdk acknowledge 34892 34635 || true
+
+      - name: CDK Drift Detection
+        id: drift-check
+        run: |
+          cd infrastructure
+          
+          echo "## 🔍 Infrastructure Drift Detection: ${{ matrix.environment }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          # Initialize drift tracking
+          DRIFT_DETECTED=false
+          DRIFT_SUMMARY=""
+          STACKS=("TestApp-VPC-${{ matrix.environment }}" "TestApp-Platform-${{ matrix.environment }}" "TestApp-App-${{ matrix.environment }}")
+          
+          # Check if stacks exist
+          for stack in "${STACKS[@]}"; do
+            echo "### Checking Stack: $stack" >> $GITHUB_STEP_SUMMARY
+            
+            # Check if stack exists
+            if aws cloudformation describe-stacks --stack-name "$stack" &>/dev/null; then
+              echo "✅ Stack exists: $stack" >> $GITHUB_STEP_SUMMARY
+              
+              # Run CDK diff to detect drift
+              echo "Running CDK diff for $stack..."
+              DIFF_OUTPUT=$(npx cdk diff "$stack" --context environment=${{ matrix.environment }} 2>&1 || true)
+              
+              # Check if there are differences
+              if echo "$DIFF_OUTPUT" | grep -q "Stack.*"; then
+                if echo "$DIFF_OUTPUT" | grep -qE "(Resources|Parameters|Outputs|Metadata)" && \
+                   ! echo "$DIFF_OUTPUT" | grep -q "There were no differences"; then
+                  
+                  echo "⚠️ **DRIFT DETECTED** in $stack" >> $GITHUB_STEP_SUMMARY
+                  DRIFT_DETECTED=true
+                  
+                  # Capture drift details (truncated for summary)
+                  DRIFT_DETAILS=$(echo "$DIFF_OUTPUT" | head -20)
+                  echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+                  echo "$DRIFT_DETAILS" >> $GITHUB_STEP_SUMMARY
+                  echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+                  
+                  # Add to summary
+                  if [ -z "$DRIFT_SUMMARY" ]; then
+                    DRIFT_SUMMARY="$stack"
+                  else
+                    DRIFT_SUMMARY="$DRIFT_SUMMARY,$stack"  
+                  fi
+                else
+                  echo "✅ No drift detected in $stack" >> $GITHUB_STEP_SUMMARY
+                fi
+              else
+                echo "ℹ️ Unable to determine drift status for $stack" >> $GITHUB_STEP_SUMMARY
+              fi
+              
+              # Save full diff output
+              echo "$DIFF_OUTPUT" > "${stack}-drift-report.txt"
+              
+            else
+              echo "❌ Stack not found: $stack" >> $GITHUB_STEP_SUMMARY
+              echo "This could indicate the stack was deleted or never deployed." >> $GITHUB_STEP_SUMMARY
+            fi
+            
+            echo "" >> $GITHUB_STEP_SUMMARY
+          done
+          
+          # Set outputs
+          echo "drift_detected=$DRIFT_DETECTED" >> $GITHUB_OUTPUT
+          echo "drift_summary=$DRIFT_SUMMARY" >> $GITHUB_OUTPUT
+          
+          # Overall summary
+          if [ "$DRIFT_DETECTED" = "true" ]; then
+            echo "## 🚨 DRIFT DETECTION ALERT" >> $GITHUB_STEP_SUMMARY
+            echo "Infrastructure drift detected in environment: ${{ matrix.environment }}" >> $GITHUB_STEP_SUMMARY
+            echo "Affected stacks: $DRIFT_SUMMARY" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "## ✅ NO DRIFT DETECTED" >> $GITHUB_STEP_SUMMARY
+            echo "All infrastructure stacks are in sync for environment: ${{ matrix.environment }}" >> $GITHUB_STEP_SUMMARY
+          fi
+
+      - name: Upload drift reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: drift-reports-${{ matrix.environment }}
+          path: infrastructure/*-drift-report.txt
+          retention-days: 30
+
+      - name: CloudFormation Drift Detection
+        if: env.CHECK_TYPE == 'comprehensive'
+        run: |
+          echo "### 🌊 CloudFormation Drift Detection" >> $GITHUB_STEP_SUMMARY
+          
+          STACKS=("TestApp-VPC-${{ matrix.environment }}" "TestApp-Platform-${{ matrix.environment }}" "TestApp-App-${{ matrix.environment }}")
+          
+          for stack in "${STACKS[@]}"; do
+            if aws cloudformation describe-stacks --stack-name "$stack" &>/dev/null; then
+              echo "Starting drift detection for $stack..."
+              
+              # Start drift detection
+              DETECTION_ID=$(aws cloudformation detect-stack-drift \
+                --stack-name "$stack" \
+                --query 'StackDriftDetectionId' \
+                --output text 2>/dev/null || echo "")
+              
+              if [ -n "$DETECTION_ID" ]; then
+                # Wait for completion (up to 5 minutes)
+                for i in {1..30}; do
+                  STATUS=$(aws cloudformation describe-stack-drift-detection-status \
+                    --stack-drift-detection-id "$DETECTION_ID" \
+                    --query 'DetectionStatus' \
+                    --output text 2>/dev/null || echo "FAILED")
+                  
+                  if [ "$STATUS" = "DETECTION_COMPLETE" ]; then
+                    DRIFT_STATUS=$(aws cloudformation describe-stack-drift-detection-status \
+                      --stack-drift-detection-id "$DETECTION_ID" \
+                      --query 'StackDriftStatus' \
+                      --output text 2>/dev/null || echo "UNKNOWN")
+                    
+                    echo "- **$stack**: $DRIFT_STATUS" >> $GITHUB_STEP_SUMMARY
+                    break
+                  elif [ "$STATUS" = "DETECTION_FAILED" ]; then
+                    echo "- **$stack**: DETECTION_FAILED" >> $GITHUB_STEP_SUMMARY
+                    break
+                  fi
+                  
+                  sleep 10
+                done
+              else
+                echo "- **$stack**: Failed to start detection" >> $GITHUB_STEP_SUMMARY
+              fi
+            fi
+          done
+
+  # 📊 AWS Config Compliance Check
+  compliance-check:
+    name: 📊 Compliance Check (${{ matrix.environment }})
+    runs-on: ubuntu-latest
+    if: env.CHECK_TYPE != 'quick'
+    strategy:
+      fail-fast: false
+      matrix:
+        environment: ${{ fromJSON(format('[{0}]', env.ENVIRONMENTS)) }}
+    outputs:
+      compliance-violations: ${{ steps.compliance.outputs.violations }}
+      
+    steps:
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4.3.1
+        with:
+          role-to-assume: arn:aws:iam::892193016253:role/github-actions-role
+          role-session-name: github-actions
+          aws-region: us-east-1
+
+      - name: Check AWS Config compliance
+        id: compliance
+        run: |
+          echo "## 📊 AWS Config Compliance Check: ${{ matrix.environment }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          # Get compliance summary
+          COMPLIANCE_SUMMARY=$(aws configservice get-compliance-summary-by-config-rule \
+            --query 'ComplianceSummary' \
+            --output json 2>/dev/null || echo '{}')
+          
+          if [ "$COMPLIANCE_SUMMARY" != "{}" ]; then
+            COMPLIANT=$(echo "$COMPLIANCE_SUMMARY" | jq -r '.CompliantResourceCount.CappedCount // 0')
+            NON_COMPLIANT=$(echo "$COMPLIANCE_SUMMARY" | jq -r '.NonCompliantResourceCount.CappedCount // 0')
+            INSUFFICIENT_DATA=$(echo "$COMPLIANCE_SUMMARY" | jq -r '.ComplianceByConfigRule.INSUFFICIENT_DATA // 0')
+            
+            echo "### Compliance Summary:" >> $GITHUB_STEP_SUMMARY
+            echo "- ✅ **Compliant Resources**: $COMPLIANT" >> $GITHUB_STEP_SUMMARY
+            echo "- ❌ **Non-Compliant Resources**: $NON_COMPLIANT" >> $GITHUB_STEP_SUMMARY
+            echo "- ⚪ **Insufficient Data**: $INSUFFICIENT_DATA" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            
+            # Get detailed non-compliant resources if any
+            if [ "$NON_COMPLIANT" -gt 0 ]; then
+              echo "### 🚨 Non-Compliant Resources:" >> $GITHUB_STEP_SUMMARY
+              
+              # Get non-compliant resources
+              aws configservice get-compliance-details-by-config-rule \
+                --config-rule-names $(aws configservice describe-config-rules \
+                  --query 'ConfigRules[?starts_with(ConfigRuleName, `testapp-${{ matrix.environment }}`)].ConfigRuleName' \
+                  --output text | tr '\t' ' ') \
+                --compliance-types NON_COMPLIANT \
+                --query 'EvaluationResults[].[EvaluationResultIdentifier.EvaluationResultQualifier.ResourceId, ConfigRuleInvokedTime, ComplianceType]' \
+                --output table >> $GITHUB_STEP_SUMMARY 2>/dev/null || echo "Unable to fetch detailed compliance data" >> $GITHUB_STEP_SUMMARY
+            fi
+            
+            echo "violations=$NON_COMPLIANT" >> $GITHUB_OUTPUT
+          else
+            echo "ℹ️ **AWS Config not available or no rules configured**" >> $GITHUB_STEP_SUMMARY
+            echo "violations=0" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Security group compliance check
+        run: |
+          echo "### 🔒 Security Group Compliance" >> $GITHUB_STEP_SUMMARY
+          
+          # Check for overly permissive security groups
+          PERMISSIVE_SGs=$(aws ec2 describe-security-groups \
+            --filters "Name=group-name,Values=*testapp*${{ matrix.environment }}*" \
+            --query "SecurityGroups[?IpPermissions[?IpRanges[?CidrIp=='0.0.0.0/0'] || Ipv6Ranges[?CidrIpv6=='::/0']]].[GroupId,GroupName,IpPermissions[0].FromPort]" \
+            --output table 2>/dev/null || echo "")
+          
+          if [ -n "$PERMISSIVE_SGs" ] && [ "$PERMISSIVE_SGs" != "None" ]; then
+            echo "⚠️ **Potentially overly permissive security groups found:**" >> $GITHUB_STEP_SUMMARY
+            echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+            echo "$PERMISSIVE_SGs" >> $GITHUB_STEP_SUMMARY
+            echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "✅ No overly permissive security groups detected" >> $GITHUB_STEP_SUMMARY
+          fi
+
+  # 🔧 Auto-Remediation (if enabled)
+  auto-remediation:
+    name: 🔧 Auto Remediation
+    runs-on: ubuntu-latest
+    needs: [drift-detection, compliance-check]
+    if: env.AUTO_REMEDIATE == 'true' && (needs.drift-detection.outputs.drift-detected == 'true' || needs.compliance-check.outputs.compliance-violations != '0')
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4.3.1
+        with:
+          role-to-assume: arn:aws:iam::892193016253:role/github-actions-role
+          role-session-name: github-actions
+          aws-region: us-east-1
+
+      - name: Attempt automatic remediation
+        id: remediation
+        run: |
+          echo "## 🔧 Automatic Remediation Attempt" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "⚠️ **Auto-remediation is experimental and limited to safe operations**" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          # For now, we only log what would be remediated
+          # In a real implementation, this would perform safe remediation actions
+          
+          echo "### Remediation Actions (Simulation):" >> $GITHUB_STEP_SUMMARY
+          echo "- Would update CDK stacks to match desired state" >> $GITHUB_STEP_SUMMARY
+          echo "- Would fix non-critical compliance issues" >> $GITHUB_STEP_SUMMARY
+          echo "- Would NOT modify production security groups" >> $GITHUB_STEP_SUMMARY
+          echo "- Would NOT delete or modify data resources" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "🚧 **Manual intervention required for actual remediation**" >> $GITHUB_STEP_SUMMARY
+
+  # 📋 Create Drift Report Issue
+  create-drift-issue:
+    name: 📋 Create Drift Report
+    runs-on: ubuntu-latest
+    needs: [drift-detection, compliance-check]
+    if: always() && (needs.drift-detection.outputs.drift-detected == 'true' || needs.compliance-check.outputs.compliance-violations != '0')
+    
+    steps:
+      - name: Create comprehensive drift issue
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const driftDetected = '${{ needs.drift-detection.outputs.drift-detected }}';
+            const complianceViolations = '${{ needs.compliance-check.outputs.compliance-violations }}' || '0';
+            const checkType = '${{ env.CHECK_TYPE }}';
+            const environments = '${{ env.ENVIRONMENTS }}';
+            
+            const severity = (driftDetected === 'true' && parseInt(complianceViolations) > 0) 
+              ? 'HIGH' 
+              : (driftDetected === 'true' || parseInt(complianceViolations) > 5) 
+                ? 'MEDIUM' 
+                : 'LOW';
+            
+            const severityEmoji = {
+              'HIGH': '🔴',
+              'MEDIUM': '🟡', 
+              'LOW': '🟢'
+            };
+            
+            const issueBody = \`## \${severityEmoji[severity]} Infrastructure Drift & Compliance Report
+            
+            ### 📊 **Detection Summary**
+            
+            | Metric | Status | Details |
+            |--------|--------|---------|
+            | **Infrastructure Drift** | \${driftDetected === 'true' ? '🚨 DETECTED' : '✅ NONE'} | CDK template vs actual state |
+            | **Compliance Violations** | \${complianceViolations} | AWS Config rule violations |
+            | **Severity Level** | \${severityEmoji[severity]} **\${severity}** | Based on risk assessment |
+            | **Environments Checked** | \${environments} | All configured environments |
+            | **Check Type** | \${checkType} | Detection thoroughness level |
+            | **Detection Time** | \$(date -u +"%Y-%m-%d %H:%M:%S UTC") | Automated scan timestamp |
+            
+            ### 🔍 **Drift Analysis**
+            
+            \${driftDetected === 'true' 
+              ? \`**⚠️ Infrastructure drift detected**
+            
+            Infrastructure components have diverged from their defined state. This could be due to:
+            - Manual changes made outside of CDK/CloudFormation
+            - Resource modifications through AWS Console
+            - External automation or scripts
+            - Failed or partial deployments
+            
+            **Affected Components**: \${'${{ needs.drift-detection.outputs.drift-summary }}' || 'See workflow logs'}\`
+              : \`**✅ No infrastructure drift detected**
+            
+            All infrastructure components match their defined CDK templates.\`}
+            
+            ### 📋 **Compliance Status**
+            
+            \${parseInt(complianceViolations) > 0
+              ? \`**❌ \${complianceViolations} compliance violations found**
+            
+            Resources are not complying with defined governance policies:
+            - Security group configurations
+            - Resource tagging requirements  
+            - Encryption standards
+            - Access control policies
+            - Network configurations
+            
+            **Action Required**: Review AWS Config dashboard for detailed violations.\`
+              : \`**✅ No compliance violations detected**
+            
+            All resources comply with governance policies.\`}
+            
+            ### 🛠️ **Recommended Actions**
+            
+            **Immediate Actions (within 24 hours):**
+            - [ ] Review drift detection reports in workflow artifacts
+            - [ ] Analyze compliance violations in AWS Config dashboard
+            - [ ] Identify root cause of any manual changes
+            - [ ] Plan remediation approach for critical issues
+            
+            **Short-term Actions (within 1 week):**
+            - [ ] Update CDK templates if legitimate changes need to be codified
+            - [ ] Fix compliance violations through proper deployment process  
+            - [ ] Implement additional preventive controls if needed
+            - [ ] Update documentation if new patterns are adopted
+            
+            **Long-term Actions (ongoing):**
+            - [ ] Review and strengthen change management processes
+            - [ ] Consider implementing AWS Config remediation actions
+            - [ ] Enhance monitoring and alerting for drift detection
+            - [ ] Conduct team training on infrastructure as code practices
+            
+            ### 🔗 **Reference Links**
+            
+            - **Workflow Run**: https://github.com/\${{ github.repository }}/actions/runs/\${{ github.run_id }}
+            - **Drift Reports**: [Download artifacts](https://github.com/\${{ github.repository }}/actions/runs/\${{ github.run_id }})
+            - **AWS Config Console**: [View compliance dashboard](https://console.aws.amazon.com/config/)
+            - **CloudFormation Console**: [Review stacks](https://console.aws.amazon.com/cloudformation/)
+            - **Infrastructure Code**: https://github.com/\${{ github.repository }}/tree/\${{ github.sha }}/infrastructure
+            
+            ### 📈 **Remediation Approach**
+            
+            **For Infrastructure Drift:**
+            1. **Investigate**: Determine why manual changes were made
+            2. **Validate**: Confirm changes are beneficial or necessary
+            3. **Codify**: Update CDK templates to reflect legitimate changes  
+            4. **Deploy**: Use proper CI/CD process to apply updates
+            5. **Rollback**: Revert unauthorized changes if harmful
+            
+            **For Compliance Violations:**
+            1. **Prioritize**: Focus on high-risk security violations first
+            2. **Research**: Understand the specific compliance requirement
+            3. **Plan**: Design compliant solution that meets business needs
+            4. **Implement**: Deploy fixes through standard process
+            5. **Validate**: Confirm remediation resolves the violation
+            
+            ### 🚨 **Escalation Criteria**
+            
+            **Escalate immediately if:**
+            - Critical security resources have been modified
+            - Production data access controls have changed
+            - Encryption keys or certificates have been altered
+            - Network security boundaries have been compromised
+            - Compliance violations affect regulatory requirements
+            
+            **Emergency Contact**: \${{ vars.SECURITY_CONTACT || vars.EMERGENCY_CONTACT || 'DevOps Team' }}
+            
+            ---
+            
+            ### 📝 **Audit Trail**
+            
+            **Detection ID**: \${{ github.run_id }}
+            **Repository**: \${{ github.repository }}  
+            **Branch**: \${{ github.ref_name }}
+            **Commit**: \${{ github.sha }}
+            **Actor**: \${{ github.actor }}
+            **Trigger**: \${{ github.event_name }}
+            
+            ---
+            
+            ### ⚡ **Quick Actions**
+            
+            **To acknowledge this report:**
+            - Comment with: \`acknowledged\` or \`ack\`
+            - Assign this issue to responsible team member
+            - Apply appropriate labels for tracking
+            
+            **To close this report:**
+            - Complete all remediation actions
+            - Verify drift is resolved through re-scan
+            - Comment with: \`resolved\` and summary of actions taken
+            
+            ---
+            
+            **Note**: This is an automated report. Manual verification of findings is recommended before taking action.
+            \`;
+            
+            const issue = await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: \`\${severityEmoji[severity]} Infrastructure Drift Report - \${severity} Severity (\${new Date().toISOString().split('T')[0]})\`,
+              body: issueBody,
+              labels: [
+                'infrastructure-drift',
+                \`severity-\${severity.toLowerCase()}\`,
+                'automated-detection',
+                driftDetected === 'true' ? 'drift-detected' : 'drift-clean',
+                parseInt(complianceViolations) > 0 ? 'compliance-violations' : 'compliance-clean'
+              ]
+            });
+            
+            console.log(\`Created drift report issue #\${issue.data.number}\`);
+
+  # 📊 Drift Detection Summary
+  drift-summary:
+    name: 📊 Drift Summary
+    runs-on: ubuntu-latest
+    needs: [drift-detection, compliance-check, auto-remediation, create-drift-issue]
+    if: always()
+    
+    steps:
+      - name: Generate comprehensive summary
+        run: |
+          echo "## 🎯 Infrastructure Drift Detection Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### 📋 Scan Configuration:" >> $GITHUB_STEP_SUMMARY
+          echo "- **Environments**: ${{ env.ENVIRONMENTS }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Check Type**: ${{ env.CHECK_TYPE }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Auto Remediation**: ${{ env.AUTO_REMEDIATE }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Trigger**: ${{ github.event_name }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### 🔍 Results Summary:" >> $GITHUB_STEP_SUMMARY
+          echo "- **Drift Detection**: ${{ needs.drift-detection.result || 'skipped' }}" >> $GITHUB_STEP_SUMMARY  
+          echo "- **Compliance Check**: ${{ needs.compliance-check.result || 'skipped' }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Auto Remediation**: ${{ needs.auto-remediation.result || 'skipped' }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Issue Creation**: ${{ needs.create-drift-issue.result || 'skipped' }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          # Determine overall health
+          DRIFT_STATUS="${{ needs.drift-detection.outputs.drift-detected }}"
+          VIOLATIONS="${{ needs.compliance-check.outputs.compliance-violations }}"
+          
+          if [ "$DRIFT_STATUS" = "true" ] || [ "$VIOLATIONS" != "0" ] && [ "$VIOLATIONS" != "" ]; then
+            echo "## 🚨 **Action Required**" >> $GITHUB_STEP_SUMMARY
+            echo "Infrastructure drift or compliance violations detected. Review created issues for details." >> $GITHUB_STEP_SUMMARY
+          else
+            echo "## ✅ **All Clear**" >> $GITHUB_STEP_SUMMARY
+            echo "No infrastructure drift or compliance violations detected." >> $GITHUB_STEP_SUMMARY
+          fi
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Next scheduled scan**: Daily at 6:00 AM UTC" >> $GITHUB_STEP_SUMMARY

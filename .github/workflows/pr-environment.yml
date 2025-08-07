@@ -1,0 +1,323 @@
+name: PR Environment Management
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, closed]
+    branches: [main, master]
+    paths:
+      - 'src/**'
+      - 'infrastructure/**'
+      - 'pyproject.toml'
+      - 'Dockerfile'
+      - '.github/workflows/**'
+  
+  issue_comment:
+    types: [created]
+
+env:
+  PYTHON_VERSION: '3.13'
+  PR_ID: ${{ github.event.number || github.event.issue.number }}
+
+permissions:
+  id-token: write
+  contents: read
+  pull-requests: write
+  issues: write
+
+jobs:
+  # 🏗️ Deploy PR Environment
+  deploy-pr-environment:
+    name: 🏗️ Deploy PR Environment
+    runs-on: ${{ vars.RUNS_ON || 'ubuntu-latest' }}
+    if: |
+      github.event_name == 'pull_request' && 
+      github.event.action != 'closed' &&
+      !contains(github.event.head_commit.message, '[skip deploy]') &&
+      (
+        contains(github.event.pull_request.labels.*.name, 'deploy') ||
+        contains(github.event.pull_request.body, '/deploy') ||
+        github.event.pull_request.draft == false
+      )
+    environment:
+      name: pr-${{ github.event.number }}
+      url: http://testapp-pr-${{ github.event.number }}-alb.elb.amazonaws.com
+      
+    outputs:
+      pr-url: ${{ steps.deployment.outputs.application-url }}
+      
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4.3.1
+        with:
+          role-to-assume: arn:aws:iam::892193016253:role/github-actions-role
+          role-session-name: github-actions-pr-${{ env.PR_ID }}
+          aws-region: us-east-1
+
+      - name: Setup Node.js for Infrastructure
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: 'npm'
+          cache-dependency-path: infrastructure/package-lock.json
+
+      - name: Build infrastructure
+        run: |
+          cd infrastructure
+          npm ci --prefer-offline
+          npm run build
+          npx cdk acknowledge 34892 34635 || true
+
+      - name: Deploy PR infrastructure
+        id: deployment
+        run: |
+          cd infrastructure
+          
+          echo "## 🏗️ Deploying PR Environment #${{ env.PR_ID }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          # Set PR-specific context
+          PR_CONTEXT="prId=${{ env.PR_ID }}"
+          
+          # Deploy infrastructure stacks for PR
+          echo "### 1. Deploying VPC Stack..." >> $GITHUB_STEP_SUMMARY
+          npx cdk deploy TestApp-VPC-pr${{ env.PR_ID }} \
+            --require-approval never \
+            --context environment=pr \
+            --context $PR_CONTEXT \
+            --outputs-file vpc-outputs.json
+          
+          echo "### 2. Deploying Platform Stack..." >> $GITHUB_STEP_SUMMARY
+          npx cdk deploy TestApp-Platform-pr${{ env.PR_ID }} \
+            --require-approval never \
+            --context environment=pr \
+            --context $PR_CONTEXT \
+            --outputs-file platform-outputs.json
+          
+          echo "### 3. Deploying Application Stack..." >> $GITHUB_STEP_SUMMARY
+          npx cdk deploy TestApp-App-pr${{ env.PR_ID }} \
+            --require-approval never \
+            --context environment=pr \
+            --context $PR_CONTEXT \
+            --context taskImageTag=pr-${{ github.event.number }} \
+            --outputs-file app-outputs.json
+          
+          # Extract application URL
+          if [[ -f app-outputs.json ]]; then
+            APP_URL=$(jq -r '.["TestApp-App-pr'${{ env.PR_ID }}'"]["ApplicationUrl"] // "Not available"' app-outputs.json)
+            echo "application-url=$APP_URL" >> $GITHUB_OUTPUT
+            echo "### ✅ PR Environment Deployed" >> $GITHUB_STEP_SUMMARY
+            echo "**Application URL:** $APP_URL" >> $GITHUB_STEP_SUMMARY
+          fi
+
+      - name: Build and push container image
+        run: |
+          echo "### 🐳 Building Container Image" >> $GITHUB_STEP_SUMMARY
+          
+          # Get ECR repository URI
+          ECR_URI=$(aws ecr describe-repositories --repository-names testapp-pr --query 'repositories[0].repositoryUri' --output text 2>/dev/null || echo "")
+          
+          if [[ -z "$ECR_URI" ]]; then
+            echo "Creating ECR repository for PR environments..."
+            aws ecr create-repository --repository-name testapp-pr --image-scanning-configuration scanOnPush=true || true
+            ECR_URI=$(aws ecr describe-repositories --repository-names testapp-pr --query 'repositories[0].repositoryUri' --output text)
+          fi
+          
+          # Login to ECR
+          aws ecr get-login-password --region us-east-1 | docker login --username AWS --password-stdin $ECR_URI
+          
+          # Build and push image
+          docker build -t $ECR_URI:pr-${{ env.PR_ID }} .
+          docker push $ECR_URI:pr-${{ env.PR_ID }}
+          
+          echo "**Container Image:** \`$ECR_URI:pr-${{ env.PR_ID }}\`" >> $GITHUB_STEP_SUMMARY
+
+      - name: Wait for service to stabilize
+        run: |
+          echo "### ⏳ Waiting for ECS Service to Stabilize" >> $GITHUB_STEP_SUMMARY
+          
+          aws ecs wait services-stable \
+            --cluster testapp-cluster-pr${{ env.PR_ID }} \
+            --services testapp-service-pr${{ env.PR_ID }} \
+            --cli-read-timeout 600 || true
+          
+          echo "✅ Service stabilized" >> $GITHUB_STEP_SUMMARY
+
+  # 🧪 Test PR Environment
+  test-pr-environment:
+    name: 🧪 Test PR Environment
+    runs-on: ubuntu-latest
+    needs: deploy-pr-environment
+    if: needs.deploy-pr-environment.outputs.pr-url != ''
+    
+    steps:
+      - name: Health check PR environment
+        run: |
+          echo "## 🏥 Testing PR Environment" >> $GITHUB_STEP_SUMMARY
+          
+          PR_URL="${{ needs.deploy-pr-environment.outputs.pr-url }}"
+          
+          if [[ "$PR_URL" != "Not available" ]]; then
+            echo "Testing: $PR_URL" >> $GITHUB_STEP_SUMMARY
+            
+            # Wait and test health endpoint
+            for i in {1..10}; do
+              if curl -sf "${PR_URL}/health/" > /dev/null; then
+                echo "✅ Health check passed on attempt $i" >> $GITHUB_STEP_SUMMARY
+                break
+              else
+                echo "⏳ Health check attempt $i failed, retrying..." >> $GITHUB_STEP_SUMMARY
+                sleep 30
+              fi
+            done
+          else
+            echo "⚠️ PR URL not available for testing" >> $GITHUB_STEP_SUMMARY
+          fi
+
+  # 💬 Comment on PR
+  comment-pr-deployment:
+    name: 💬 Comment on PR
+    runs-on: ubuntu-latest
+    needs: [deploy-pr-environment, test-pr-environment]
+    if: always() && github.event_name == 'pull_request'
+    
+    steps:
+      - name: Comment deployment result
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const prUrl = "${{ needs.deploy-pr-environment.outputs.pr-url }}";
+            const deploySuccess = "${{ needs.deploy-pr-environment.result }}" === 'success';
+            const testSuccess = "${{ needs.test-pr-environment.result }}" === 'success';
+            
+            let comment = `## 🚀 **PR Environment Update**\n\n`;
+            
+            if (deploySuccess) {
+              comment += `✅ **PR environment deployed successfully!**\n\n`;
+              comment += `### 🔗 **Access Your PR Environment**\n`;
+              comment += `- **Application URL:** ${prUrl !== 'Not available' ? prUrl : 'Pending...'}\n`;
+              comment += `- **Environment:** \`pr${{ env.PR_ID }}\`\n`;
+              comment += `- **Container Tag:** \`pr-${{ env.PR_ID }}\`\n\n`;
+              
+              if (testSuccess) {
+                comment += `✅ **Health checks passed** - Environment is ready for testing\n\n`;
+              } else {
+                comment += `⚠️ **Health checks pending** - Environment may still be starting\n\n`;
+              }
+              
+              comment += `### 🧪 **Testing Instructions**\n`;
+              comment += `1. Click the application URL above\n`;
+              comment += `2. Test your changes in the isolated environment\n`;
+              comment += `3. The environment will be automatically cleaned up when the PR is closed\n\n`;
+            } else {
+              comment += `❌ **PR environment deployment failed**\n\n`;
+              comment += `Please check the [workflow logs](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}) for details.\n\n`;
+            }
+            
+            comment += `---\n`;
+            comment += `### 🛠️ **Management Commands**\n`;
+            comment += `- Comment \`/destroy\` to manually clean up this environment\n`;
+            comment += `- Comment \`/redeploy\` to redeploy the environment\n`;
+            comment += `- Add \`[skip deploy]\` to commit messages to skip deployment\n`;
+            
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: comment
+            });
+
+  # 🎯 Handle PR Comments (for management commands)
+  handle-pr-commands:
+    name: 🎯 Handle PR Commands
+    runs-on: ubuntu-latest
+    if: |
+      github.event_name == 'issue_comment' &&
+      github.event.issue.pull_request &&
+      contains(github.event.comment.body, '/destroy') &&
+      github.event.comment.author_association == 'COLLABORATOR'
+    
+    steps:
+      - name: Destroy PR environment
+        run: |
+          echo "🗑️ Destroying PR environment as requested by @${{ github.event.comment.user.login }}"
+          # This will trigger the cleanup job
+          echo "destroy=true" >> $GITHUB_ENV
+
+  # 🗑️ Cleanup PR Environment
+  cleanup-pr-environment:
+    name: 🗑️ Cleanup PR Environment
+    runs-on: ${{ vars.RUNS_ON || 'ubuntu-latest' }}
+    if: |
+      always() && (
+        (github.event_name == 'pull_request' && github.event.action == 'closed') ||
+        env.destroy == 'true'
+      )
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4.3.1
+        with:
+          role-to-assume: arn:aws:iam::892193016253:role/github-actions-role
+          role-session-name: github-actions-pr-cleanup-${{ env.PR_ID }}
+          aws-region: us-east-1
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: 'npm'
+          cache-dependency-path: infrastructure/package-lock.json
+
+      - name: Destroy PR infrastructure
+        run: |
+          cd infrastructure
+          npm ci --prefer-offline
+          npm run build
+          
+          echo "## 🗑️ Cleaning up PR Environment #${{ env.PR_ID }}" >> $GITHUB_STEP_SUMMARY
+          
+          # Destroy stacks in reverse dependency order
+          echo "### 1. Destroying Application Stack..." >> $GITHUB_STEP_SUMMARY
+          npx cdk destroy TestApp-App-pr${{ env.PR_ID }} --force \
+            --context environment=pr \
+            --context prId=${{ env.PR_ID }} || true
+          
+          echo "### 2. Destroying Platform Stack..." >> $GITHUB_STEP_SUMMARY
+          npx cdk destroy TestApp-Platform-pr${{ env.PR_ID }} --force \
+            --context environment=pr \
+            --context prId=${{ env.PR_ID }} || true
+          
+          echo "### 3. Destroying VPC Stack..." >> $GITHUB_STEP_SUMMARY
+          npx cdk destroy TestApp-VPC-pr${{ env.PR_ID }} --force \
+            --context environment=pr \
+            --context prId=${{ env.PR_ID }} || true
+          
+          echo "### ✅ PR Environment Cleanup Complete" >> $GITHUB_STEP_SUMMARY
+
+      - name: Comment cleanup result
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const comment = `## 🗑️ **PR Environment Cleaned Up**\n\n` +
+              `✅ All infrastructure for PR #${{ env.PR_ID }} has been destroyed.\n\n` +
+              `**Resources cleaned up:**\n` +
+              `- ECS Service and Task Definition\n` +
+              `- Application Load Balancer\n` +
+              `- VPC and associated networking\n` +
+              `- Security Groups and IAM Roles\n` +
+              `- CloudWatch Log Groups\n\n` +
+              `💡 **Note:** Container images in ECR are retained for potential reuse.`;
+            
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: comment
+            });

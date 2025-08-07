@@ -1,0 +1,235 @@
+name: Quick Container Deploy
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Target environment'
+        required: true
+        type: choice
+        options:
+          - dev
+          - production
+      
+      image_tag:
+        description: 'Container image tag to deploy'
+        required: true
+        type: string
+      
+      service_name:
+        description: 'ECS service name (optional - will auto-detect)'
+        required: false
+        type: string
+
+env:
+  ENVIRONMENT: ${{ github.event.inputs.environment }}
+  IMAGE_TAG: ${{ github.event.inputs.image_tag }}
+  SERVICE_NAME: ${{ github.event.inputs.service_name || format('testapp-service-{0}', github.event.inputs.environment) }}
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  quick-deploy:
+    name: 🚀 Quick Container Deploy
+    runs-on: ${{ vars.RUNS_ON || 'ubuntu-latest' }}
+    environment:
+      name: ${{ env.ENVIRONMENT }}
+      
+    steps:
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4.3.1
+        with:
+          role-to-assume: arn:aws:iam::892193016253:role/github-actions-role
+          role-session-name: github-actions-quick-deploy
+          aws-region: us-east-1
+
+      - name: Validate inputs
+        run: |
+          echo "## 🎯 Quick Deploy Configuration" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Parameter | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|-----------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| **Environment** | ${{ env.ENVIRONMENT }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Image Tag** | ${{ env.IMAGE_TAG }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Service Name** | ${{ env.SERVICE_NAME }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Initiated By** | ${{ github.actor }} |" >> $GITHUB_STEP_SUMMARY
+
+      - name: Get current service information
+        id: service-info
+        run: |
+          echo "### 📊 Current Service Status" >> $GITHUB_STEP_SUMMARY
+          
+          # Get cluster name
+          CLUSTER_NAME="testapp-cluster-${{ env.ENVIRONMENT }}"
+          
+          # Check if service exists
+          if aws ecs describe-services \
+            --cluster $CLUSTER_NAME \
+            --services ${{ env.SERVICE_NAME }} \
+            --query 'services[0].serviceName' \
+            --output text | grep -q ${{ env.SERVICE_NAME }}; then
+            
+            # Get current service details
+            CURRENT_TASK_DEF=$(aws ecs describe-services \
+              --cluster $CLUSTER_NAME \
+              --services ${{ env.SERVICE_NAME }} \
+              --query 'services[0].taskDefinition' \
+              --output text)
+            
+            CURRENT_IMAGE=$(aws ecs describe-task-definition \
+              --task-definition $CURRENT_TASK_DEF \
+              --query 'taskDefinition.containerDefinitions[0].image' \
+              --output text)
+            
+            CURRENT_TAG=$(echo $CURRENT_IMAGE | cut -d':' -f2)
+            
+            echo "**Current Configuration:**" >> $GITHUB_STEP_SUMMARY
+            echo "- Task Definition: \`$CURRENT_TASK_DEF\`" >> $GITHUB_STEP_SUMMARY
+            echo "- Current Image Tag: \`$CURRENT_TAG\`" >> $GITHUB_STEP_SUMMARY
+            echo "- Target Image Tag: \`${{ env.IMAGE_TAG }}\`" >> $GITHUB_STEP_SUMMARY
+            
+            echo "cluster-name=$CLUSTER_NAME" >> $GITHUB_OUTPUT
+            echo "current-task-def=$CURRENT_TASK_DEF" >> $GITHUB_OUTPUT
+            echo "current-image=$CURRENT_IMAGE" >> $GITHUB_OUTPUT
+            echo "service-exists=true" >> $GITHUB_OUTPUT
+          else
+            echo "❌ Service ${{ env.SERVICE_NAME }} not found in cluster $CLUSTER_NAME" >> $GITHUB_STEP_SUMMARY
+            echo "service-exists=false" >> $GITHUB_OUTPUT
+            exit 1
+          fi
+
+      - name: Update container image
+        if: steps.service-info.outputs.service-exists == 'true'
+        run: |
+          echo "### 🔄 Updating Container Image" >> $GITHUB_STEP_SUMMARY
+          
+          # Get ECR repository URI
+          ECR_URI=$(aws ecr describe-repositories \
+            --repository-names testapp-${{ env.ENVIRONMENT }} \
+            --query 'repositories[0].repositoryUri' \
+            --output text 2>/dev/null || echo "")
+          
+          if [[ -z "$ECR_URI" ]]; then
+            echo "❌ ECR repository not found for ${{ env.ENVIRONMENT }}" >> $GITHUB_STEP_SUMMARY
+            exit 1
+          fi
+          
+          NEW_IMAGE_URI="${ECR_URI}:${{ env.IMAGE_TAG }}"
+          echo "**New Image:** \`$NEW_IMAGE_URI\`" >> $GITHUB_STEP_SUMMARY
+          
+          # Verify image exists in ECR
+          if aws ecr describe-images \
+            --repository-name testapp-${{ env.ENVIRONMENT }} \
+            --image-ids imageTag=${{ env.IMAGE_TAG }} \
+            --query 'imageDetails[0].imageTags' \
+            --output text > /dev/null 2>&1; then
+            echo "✅ Image verified in ECR" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "❌ Image tag ${{ env.IMAGE_TAG }} not found in ECR repository" >> $GITHUB_STEP_SUMMARY
+            echo "Available tags:" >> $GITHUB_STEP_SUMMARY
+            aws ecr list-images \
+              --repository-name testapp-${{ env.ENVIRONMENT }} \
+              --query 'imageIds[*].imageTag' \
+              --output table >> $GITHUB_STEP_SUMMARY
+            exit 1
+          fi
+          
+          # Get current task definition and update image
+          CURRENT_TASK_DEF="${{ steps.service-info.outputs.current-task-def }}"
+          aws ecs describe-task-definition \
+            --task-definition $CURRENT_TASK_DEF \
+            --query 'taskDefinition' > current-task-def.json
+          
+          # Create new task definition with updated image
+          jq --arg image "$NEW_IMAGE_URI" \
+            '.containerDefinitions[0].image = $image | del(.taskDefinitionArn, .revision, .status, .requiresAttributes, .placementConstraints, .compatibilities, .registeredAt, .registeredBy)' \
+            current-task-def.json > new-task-def.json
+          
+          # Register new task definition
+          NEW_TASK_DEF_ARN=$(aws ecs register-task-definition \
+            --cli-input-json file://new-task-def.json \
+            --query 'taskDefinition.taskDefinitionArn' \
+            --output text)
+          
+          echo "**New Task Definition:** \`$NEW_TASK_DEF_ARN\`" >> $GITHUB_STEP_SUMMARY
+          echo "new-task-def-arn=$NEW_TASK_DEF_ARN" >> $GITHUB_ENV
+
+      - name: Update ECS service
+        run: |
+          echo "### 🚀 Updating ECS Service" >> $GITHUB_STEP_SUMMARY
+          
+          CLUSTER_NAME="${{ steps.service-info.outputs.cluster-name }}"
+          
+          # Update the service with new task definition
+          aws ecs update-service \
+            --cluster $CLUSTER_NAME \
+            --service ${{ env.SERVICE_NAME }} \
+            --task-definition ${{ env.new-task-def-arn }}
+          
+          echo "✅ Service update initiated" >> $GITHUB_STEP_SUMMARY
+          echo "**Updated Service:** \`${{ env.SERVICE_NAME }}\`" >> $GITHUB_STEP_SUMMARY
+
+      - name: Wait for deployment
+        run: |
+          echo "### ⏳ Waiting for Deployment to Complete" >> $GITHUB_STEP_SUMMARY
+          
+          CLUSTER_NAME="${{ steps.service-info.outputs.cluster-name }}"
+          
+          echo "Waiting for service to stabilize..." >> $GITHUB_STEP_SUMMARY
+          
+          aws ecs wait services-stable \
+            --cluster $CLUSTER_NAME \
+            --services ${{ env.SERVICE_NAME }} \
+            --cli-read-timeout 600
+          
+          echo "✅ **Deployment Complete!**" >> $GITHUB_STEP_SUMMARY
+
+      - name: Verify deployment
+        run: |
+          echo "### 🔍 Deployment Verification" >> $GITHUB_STEP_SUMMARY
+          
+          CLUSTER_NAME="${{ steps.service-info.outputs.cluster-name }}"
+          
+          # Get updated service information
+          UPDATED_TASK_DEF=$(aws ecs describe-services \
+            --cluster $CLUSTER_NAME \
+            --services ${{ env.SERVICE_NAME }} \
+            --query 'services[0].taskDefinition' \
+            --output text)
+          
+          UPDATED_IMAGE=$(aws ecs describe-task-definition \
+            --task-definition $UPDATED_TASK_DEF \
+            --query 'taskDefinition.containerDefinitions[0].image' \
+            --output text)
+          
+          UPDATED_TAG=$(echo $UPDATED_IMAGE | cut -d':' -f2)
+          
+          # Get service status
+          SERVICE_STATUS=$(aws ecs describe-services \
+            --cluster $CLUSTER_NAME \
+            --services ${{ env.SERVICE_NAME }} \
+            --query 'services[0].{RunningCount:runningCount,PendingCount:pendingCount,DesiredCount:desiredCount}' \
+            --output table)
+          
+          echo "**Deployment Results:**" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ Service: \`${{ env.SERVICE_NAME }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ New Task Definition: \`$UPDATED_TASK_DEF\`" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ Current Image Tag: \`$UPDATED_TAG\`" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ Target Image Tag: \`${{ env.IMAGE_TAG }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Service Status:**" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          echo "$SERVICE_STATUS" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          
+          # Verify the deployment was successful
+          if [[ "$UPDATED_TAG" == "${{ env.IMAGE_TAG }}" ]]; then
+            echo "### ✅ **DEPLOYMENT SUCCESSFUL**" >> $GITHUB_STEP_SUMMARY
+            echo "Container successfully updated to tag: \`${{ env.IMAGE_TAG }}\`" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "### ❌ **DEPLOYMENT VERIFICATION FAILED**" >> $GITHUB_STEP_SUMMARY
+            echo "Expected tag: \`${{ env.IMAGE_TAG }}\`, but got: \`$UPDATED_TAG\`" >> $GITHUB_STEP_SUMMARY
+            exit 1
+          fi

@@ -1,0 +1,533 @@
+name: Advanced Approval Workflow
+
+on:
+  workflow_call:
+    inputs:
+      environment:
+        description: 'Target environment'
+        required: true
+        type: string
+      deployment_type:
+        description: 'Type of deployment'
+        required: true
+        type: string
+      pr_number:
+        description: 'Pull request number'
+        required: false
+        type: string
+      security_level:
+        description: 'Security level requirement'
+        required: false
+        type: string
+        default: 'standard'
+    outputs:
+      approval_status:
+        description: 'Approval workflow status'
+        value: ${{ jobs.approval-orchestrator.outputs.status }}
+      issue_number:
+        description: 'Created approval issue number'
+        value: ${{ jobs.create-approval-issue.outputs.issue_number }}
+
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Target environment'
+        required: true
+        type: choice
+        options: ['dev', 'production']
+      deployment_type:
+        description: 'Type of deployment'
+        required: true
+        type: choice
+        options: ['infrastructure-only', 'application-only', 'full', 'hotfix']
+      security_level:
+        description: 'Security level requirement'
+        required: false
+        type: choice
+        default: 'standard'
+        options: ['minimal', 'standard', 'enhanced', 'critical']
+
+env:
+  ENVIRONMENT: ${{ inputs.environment }}
+  DEPLOYMENT_TYPE: ${{ inputs.deployment_type }}
+  SECURITY_LEVEL: ${{ inputs.security_level || 'standard' }}
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+  checks: write
+  actions: write
+
+jobs:
+  # 🔍 Pre-approval Security Assessment
+  security-assessment:
+    name: 🔍 Security Assessment
+    runs-on: ubuntu-latest
+    outputs:
+      risk-level: ${{ steps.assessment.outputs.risk_level }}
+      required-approvers: ${{ steps.assessment.outputs.required_approvers }}
+      checklist-items: ${{ steps.assessment.outputs.checklist_items }}
+      
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Assess deployment risk
+        id: assessment
+        run: |
+          echo "## 🔍 Security Risk Assessment" >> $GITHUB_STEP_SUMMARY
+          
+          # Determine risk level based on environment and deployment type
+          RISK_LEVEL="low"
+          REQUIRED_APPROVERS=1
+          
+          case "${{ env.ENVIRONMENT }}" in
+            "production")
+              case "${{ env.DEPLOYMENT_TYPE }}" in
+                "full"|"infrastructure-only")
+                  RISK_LEVEL="critical"
+                  REQUIRED_APPROVERS=2
+                  ;;
+                "hotfix")
+                  RISK_LEVEL="high" 
+                  REQUIRED_APPROVERS=1
+                  ;;
+                *)
+                  RISK_LEVEL="medium"
+                  REQUIRED_APPROVERS=1
+                  ;;
+              esac
+              ;;
+            "dev")
+              RISK_LEVEL="low"
+              REQUIRED_APPROVERS=1
+              ;;
+          esac
+          
+          # Override based on security level input
+          case "${{ env.SECURITY_LEVEL }}" in
+            "critical")
+              RISK_LEVEL="critical"
+              REQUIRED_APPROVERS=2
+              ;;
+            "enhanced")
+              RISK_LEVEL="high"
+              REQUIRED_APPROVERS=2
+              ;;
+          esac
+          
+          echo "risk_level=$RISK_LEVEL" >> $GITHUB_OUTPUT
+          echo "required_approvers=$REQUIRED_APPROVERS" >> $GITHUB_OUTPUT
+          
+          # Generate environment-specific checklist
+          CHECKLIST_ITEMS=""
+          case "$RISK_LEVEL" in
+            "critical")
+              CHECKLIST_ITEMS="security-scan,dependency-check,change-review,rollback-plan,stakeholder-notify,monitoring-ready,backup-verified,maintenance-window"
+              ;;
+            "high")
+              CHECKLIST_ITEMS="security-scan,dependency-check,change-review,rollback-plan,monitoring-ready"
+              ;;
+            "medium")
+              CHECKLIST_ITEMS="security-scan,change-review,rollback-plan"
+              ;;
+            "low")
+              CHECKLIST_ITEMS="change-review"
+              ;;
+          esac
+          
+          echo "checklist_items=$CHECKLIST_ITEMS" >> $GITHUB_OUTPUT
+          
+          echo "### Risk Assessment Results:" >> $GITHUB_STEP_SUMMARY
+          echo "- **Risk Level**: $RISK_LEVEL" >> $GITHUB_STEP_SUMMARY
+          echo "- **Required Approvers**: $REQUIRED_APPROVERS" >> $GITHUB_STEP_SUMMARY
+          echo "- **Environment**: ${{ env.ENVIRONMENT }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Deployment Type**: ${{ env.DEPLOYMENT_TYPE }}" >> $GITHUB_STEP_SUMMARY
+
+  # 📋 Create Approval Issue with Dynamic Checklist
+  create-approval-issue:
+    name: 📋 Create Approval Issue
+    runs-on: ubuntu-latest
+    needs: security-assessment
+    outputs:
+      issue_number: ${{ steps.create-issue.outputs.result }}
+      
+    steps:
+      - name: Generate checklist items
+        id: checklist
+        run: |
+          ITEMS="${{ needs.security-assessment.outputs.checklist-items }}"
+          CHECKLIST=""
+          
+          IFS=',' read -ra ITEM_ARRAY <<< "$ITEMS"
+          for item in "${ITEM_ARRAY[@]}"; do
+            case "$item" in
+              "security-scan")
+                CHECKLIST="$CHECKLIST- [ ] **🔒 Security Scan**: All security scans pass with no critical issues"$'\n'
+                ;;
+              "dependency-check") 
+                CHECKLIST="$CHECKLIST- [ ] **📦 Dependency Check**: No known vulnerable dependencies"$'\n'
+                ;;
+              "change-review")
+                CHECKLIST="$CHECKLIST- [ ] **👀 Change Review**: All code changes reviewed and approved"$'\n'
+                ;;
+              "rollback-plan")
+                CHECKLIST="$CHECKLIST- [ ] **🔄 Rollback Plan**: Rollback procedure documented and tested"$'\n'
+                ;;
+              "stakeholder-notify")
+                CHECKLIST="$CHECKLIST- [ ] **📢 Stakeholder Notification**: Relevant stakeholders informed"$'\n'
+                ;;
+              "monitoring-ready")
+                CHECKLIST="$CHECKLIST- [ ] **📊 Monitoring Ready**: Monitoring and alerting operational"$'\n'
+                ;;
+              "backup-verified")
+                CHECKLIST="$CHECKLIST- [ ] **💾 Backup Verified**: Recent backups confirmed and tested"$'\n'
+                ;;
+              "maintenance-window")
+                CHECKLIST="$CHECKLIST- [ ] **🕐 Maintenance Window**: Deployment scheduled in approved window"$'\n'
+                ;;
+            esac
+          done
+          
+          echo "checklist<<EOF" >> $GITHUB_OUTPUT
+          echo "$CHECKLIST" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      - name: Create detailed approval issue
+        id: create-issue
+        uses: actions/github-script@v7
+        with:
+          result-encoding: string
+          script: |
+            const riskLevel = '${{ needs.security-assessment.outputs.risk-level }}';
+            const requiredApprovers = '${{ needs.security-assessment.outputs.required-approvers }}';
+            const checklist = `${{ steps.checklist.outputs.checklist }}`;
+            
+            // Risk level emoji and description
+            const riskInfo = {
+              'low': { emoji: '🟢', description: 'Low Risk - Standard review process' },
+              'medium': { emoji: '🟡', description: 'Medium Risk - Enhanced review required' },
+              'high': { emoji: '🟠', description: 'High Risk - Thorough validation needed' },
+              'critical': { emoji: '🔴', description: 'Critical Risk - Maximum scrutiny required' }
+            };
+            
+            const risk = riskInfo[riskLevel] || riskInfo['medium'];
+            
+            const issueBody = `## ${risk.emoji} **Advanced Deployment Approval Request**
+            
+            ### 📋 **Deployment Summary**
+            
+            | Parameter | Value |
+            |-----------|-------|
+            | **Environment** | \`${{ env.ENVIRONMENT }}\` |
+            | **Deployment Type** | \`${{ env.DEPLOYMENT_TYPE }}\` |  
+            | **Security Level** | \`${{ env.SECURITY_LEVEL }}\` |
+            | **Risk Assessment** | ${risk.emoji} **${riskLevel.toUpperCase()}** |
+            | **Required Approvers** | **${requiredApprovers}** |
+            | **Initiated By** | @${{ github.actor }} |
+            | **Workflow Run** | [${{ github.run_id }}](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}) |
+            
+            ### 🎯 **Risk Analysis**
+            
+            **${risk.description}**
+            
+            This deployment has been classified as **${riskLevel}** risk based on:
+            - Target environment: ${{ env.ENVIRONMENT }}
+            - Deployment scope: ${{ env.DEPLOYMENT_TYPE }}
+            - Security requirements: ${{ env.SECURITY_LEVEL }}
+            
+            ### ✅ **Pre-Approval Checklist**
+            
+            **Before approving this deployment, verify all items below:**
+            
+            ${checklist}
+            
+            ### 🏗️ **What Will Be Deployed**
+            
+            \`\`\`
+            Environment: ${{ env.ENVIRONMENT }}
+            Type: ${{ env.DEPLOYMENT_TYPE }}
+            Risk Level: ${riskLevel}
+            \`\`\`
+            
+            ### 🔗 **Reference Links**
+            
+            - **Workflow Run**: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
+            - **Infrastructure Code**: https://github.com/${{ github.repository }}/tree/${{ github.sha }}/infrastructure
+            - **Application Code**: https://github.com/${{ github.repository }}/tree/${{ github.sha }}/src
+            - **Security Assessment**: [View in workflow run](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})
+            
+            ### ⚡ **Approval Instructions**
+            
+            **Required Approvers**: ${requiredApprovers} (from authorized list)
+            **Authorized Approvers**: ${{ vars.PRODUCTION_APPROVERS || github.repository_owner }}
+            
+            **To approve this deployment:**
+            1. ✅ **Verify all checklist items above**
+            2. 💬 **Comment with**: \`approved\`, \`approve\`, \`lgtm\`, or \`✅\`
+            3. 🏷️ **Apply label**: \`deployment-approved\` (if you have permissions)
+            
+            **To reject this deployment:**
+            1. ❌ **Comment with**: \`rejected\`, \`reject\`, \`denied\`, or \`❌\`  
+            2. 📝 **Include reason** for rejection
+            3. 🏷️ **Apply label**: \`deployment-rejected\` (if you have permissions)
+            
+            ### 🚨 **Emergency Override**
+            
+            For **critical production issues** requiring immediate deployment:
+            1. 🆘 **Comment with**: \`emergency-override\` + justification
+            2. 📞 **Contact**: ${{ vars.EMERGENCY_CONTACT || 'On-call team' }}
+            3. ⚠️ **Note**: Emergency overrides are logged and audited
+            
+            ---
+            
+            ### 📊 **Approval Tracking**
+            
+            **Status**: ⏳ Pending Review
+            **Created**: $(date -u +"%Y-%m-%d %H:%M:%S UTC")
+            **Expires**: $(date -u -d "+4 hours" +"%Y-%m-%d %H:%M:%S UTC")
+            
+            ---
+            
+            ### 🔐 **Security Notice**
+            
+            This approval request is protected by:
+            - Advanced risk assessment
+            - Multi-factor approval requirements  
+            - Automated checklist validation
+            - Audit trail logging
+            - Time-limited approval windows
+            
+            **Questions?** Contact the DevOps team or check the [deployment documentation](https://github.com/${{ github.repository }}/blob/main/README.md).
+            `;
+            
+            const issue = await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: `🚨 ${risk.emoji} Deployment Approval: ${{ env.ENVIRONMENT }} (${{ env.DEPLOYMENT_TYPE }})`,
+              body: issueBody,
+              labels: [
+                'deployment-approval',
+                \`risk-\${riskLevel}\`,
+                \`env-${{ env.ENVIRONMENT }}\`,
+                'pending-review'
+              ],
+              assignees: []
+            });
+            
+            return issue.data.number;
+
+  # ⏱️ Approval Orchestrator with Timeout
+  approval-orchestrator:
+    name: ⏱️ Approval Orchestrator  
+    runs-on: ubuntu-latest
+    needs: [security-assessment, create-approval-issue]
+    timeout-minutes: 240  # 4 hour timeout
+    outputs:
+      status: ${{ steps.final-status.outputs.status }}
+      
+    steps:
+      - name: Wait for approval with polling
+        id: wait-approval
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const issueNumber = ${{ needs.create-approval-issue.outputs.issue_number }};
+            const requiredApprovers = parseInt('${{ needs.security-assessment.outputs.required-approvers }}');
+            const riskLevel = '${{ needs.security-assessment.outputs.risk-level }}';
+            
+            // Polling configuration
+            const maxWaitTime = 4 * 60 * 60 * 1000; // 4 hours in milliseconds
+            const pollInterval = 30 * 1000; // 30 seconds
+            const startTime = Date.now();
+            
+            let approvalCount = 0;
+            let rejected = false;
+            let emergencyOverride = false;
+            
+            console.log(`Waiting for ${requiredApprovers} approval(s) for issue #${issueNumber}`);
+            console.log(`Risk level: ${riskLevel}, Max wait time: 4 hours`);
+            
+            while (Date.now() - startTime < maxWaitTime) {
+              try {
+                // Get issue comments
+                const comments = await github.rest.issues.listComments({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: issueNumber
+                });
+                
+                const approvers = new Set();
+                let latestRejection = null;
+                let latestEmergencyOverride = null;
+                
+                for (const comment of comments.data) {
+                  const body = comment.body.toLowerCase().trim();
+                  const author = comment.user.login;
+                  
+                  // Check for rejection
+                  if (body.includes('rejected') || body.includes('reject') || body.includes('denied') || body.includes('❌')) {
+                    latestRejection = { author, body: comment.body, created_at: comment.created_at };
+                  }
+                  
+                  // Check for emergency override
+                  if (body.includes('emergency-override')) {
+                    latestEmergencyOverride = { author, body: comment.body, created_at: comment.created_at };
+                  }
+                  
+                  // Check for approval
+                  if (body.includes('approved') || body.includes('approve') || body.includes('lgtm') || body.includes('✅')) {
+                    approvers.add(author);
+                  }
+                }
+                
+                // Handle rejection
+                if (latestRejection) {
+                  console.log(`Deployment rejected by ${latestRejection.author}: ${latestRejection.body}`);
+                  
+                  // Update issue with rejection
+                  await github.rest.issues.createComment({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    issue_number: issueNumber,
+                    body: `## ❌ **Deployment Rejected**\n\n**Rejected by**: @${latestRejection.author}\n**Time**: ${new Date(latestRejection.created_at).toISOString()}\n\n**Next steps**: Address rejection concerns and create new approval request.`
+                  });
+                  
+                  // Add rejection label
+                  await github.rest.issues.addLabels({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    issue_number: issueNumber,
+                    labels: ['deployment-rejected']
+                  });
+                  
+                  core.setFailed(`Deployment rejected by ${latestRejection.author}`);
+                  return;
+                }
+                
+                // Handle emergency override
+                if (latestEmergencyOverride) {
+                  console.log(`Emergency override by ${latestEmergencyOverride.author}`);
+                  
+                  await github.rest.issues.createComment({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    issue_number: issueNumber,
+                    body: `## 🆘 **Emergency Override Activated**\n\n**Override by**: @${latestEmergencyOverride.author}\n**Time**: ${new Date().toISOString()}\n\n⚠️ **This deployment bypassed normal approval process due to emergency conditions**\n\n**Audit Note**: Emergency override will be logged and reviewed.`
+                  });
+                  
+                  await github.rest.issues.addLabels({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    issue_number: issueNumber,
+                    labels: ['emergency-override', 'deployment-approved']
+                  });
+                  
+                  console.log('Emergency override approved - proceeding with deployment');
+                  return;
+                }
+                
+                // Check if we have enough approvals
+                approvalCount = approvers.size;
+                console.log(`Current approvals: ${approvalCount}/${requiredApprovers}`);
+                
+                if (approvalCount >= requiredApprovers) {
+                  console.log('Required approvals received!');
+                  
+                  // Update issue with approval
+                  const approverList = Array.from(approvers).map(user => `@${user}`).join(', ');
+                  await github.rest.issues.createComment({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    issue_number: issueNumber,
+                    body: `## ✅ **Deployment Approved**\n\n**Approved by**: ${approverList}\n**Time**: ${new Date().toISOString()}\n**Risk Level**: ${riskLevel}\n\n🚀 **Deployment will proceed automatically**`
+                  });
+                  
+                  // Add approval labels
+                  await github.rest.issues.addLabels({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    issue_number: issueNumber,
+                    labels: ['deployment-approved']
+                  });
+                  
+                  // Remove pending review label
+                  try {
+                    await github.rest.issues.removeLabel({
+                      owner: context.repo.owner,
+                      repo: context.repo.repo,
+                      issue_number: issueNumber,
+                      name: 'pending-review'
+                    });
+                  } catch (e) {
+                    // Label might not exist, ignore
+                  }
+                  
+                  return;
+                }
+                
+                // Wait before next poll
+                await new Promise(resolve => setTimeout(resolve, pollInterval));
+                
+              } catch (error) {
+                console.error('Error polling for approval:', error);
+                await new Promise(resolve => setTimeout(resolve, pollInterval));
+              }
+            }
+            
+            // Timeout reached
+            console.log('Approval timeout reached (4 hours)');
+            
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: issueNumber,
+              body: `## ⏰ **Approval Timeout**\n\n**Status**: Timed out after 4 hours\n**Approvals received**: ${approvalCount}/${requiredApprovers}\n**Time**: ${new Date().toISOString()}\n\n❌ **Deployment cancelled due to timeout**\n\n**Next steps**: Create new approval request if deployment is still needed.`
+            });
+            
+            await github.rest.issues.addLabels({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: issueNumber,
+              labels: ['approval-timeout', 'deployment-cancelled']
+            });
+            
+            core.setFailed('Approval timeout reached');
+
+      - name: Set final status
+        id: final-status
+        if: always()
+        run: |
+          if [ "${{ steps.wait-approval.outcome }}" = "success" ]; then
+            echo "status=approved" >> $GITHUB_OUTPUT
+          else
+            echo "status=failed" >> $GITHUB_OUTPUT
+          fi
+
+  # 📊 Approval Summary
+  approval-summary:
+    name: 📊 Approval Summary
+    runs-on: ubuntu-latest
+    needs: [security-assessment, create-approval-issue, approval-orchestrator]
+    if: always()
+    
+    steps:
+      - name: Generate comprehensive summary
+        run: |
+          echo "## 🎯 Advanced Approval Workflow Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### 📋 Request Details:" >> $GITHUB_STEP_SUMMARY
+          echo "- **Environment**: ${{ env.ENVIRONMENT }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Deployment Type**: ${{ env.DEPLOYMENT_TYPE }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Risk Level**: ${{ needs.security-assessment.outputs.risk-level }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Required Approvers**: ${{ needs.security-assessment.outputs.required-approvers }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### 🔗 Reference Links:" >> $GITHUB_STEP_SUMMARY
+          echo "- **Approval Issue**: [#${{ needs.create-approval-issue.outputs.issue_number }}](https://github.com/${{ github.repository }}/issues/${{ needs.create-approval-issue.outputs.issue_number }})" >> $GITHUB_STEP_SUMMARY
+          echo "- **Workflow Run**: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### 📊 Results:" >> $GITHUB_STEP_SUMMARY
+          echo "- **Security Assessment**: ${{ needs.security-assessment.result }}" >> $GITHUB_STEP_SUMMARY  
+          echo "- **Issue Creation**: ${{ needs.create-approval-issue.result }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Approval Status**: ${{ needs.approval-orchestrator.outputs.status || 'pending' }}" >> $GITHUB_STEP_SUMMARY

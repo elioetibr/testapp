@@ -1,0 +1,573 @@
+name: CD Controlled Deployment
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Target environment'
+        required: true
+        default: 'dev'
+        type: choice
+        options:
+          - dev
+          - production
+      
+      deployment_type:
+        description: 'Type of deployment'
+        required: true
+        default: 'full'
+        type: choice
+        options:
+          - infrastructure-only
+          - application-only
+          - full
+      
+      image_tag:
+        description: 'Container image tag to deploy'
+        required: false
+        default: 'latest'
+        type: string
+      
+      skip_tests:
+        description: 'Skip pre-deployment tests (emergency only)'
+        required: false
+        default: false
+        type: boolean
+      
+      dry_run:
+        description: 'Perform dry run (plan only, no deployment)'
+        required: false
+        default: false
+        type: boolean
+
+  repository_dispatch:
+    types: [deploy]
+
+env:
+  ENVIRONMENT: ${{ github.event.inputs.environment || github.event.client_payload.environment || 'dev' }}
+  DEPLOYMENT_TYPE: ${{ github.event.inputs.deployment_type || github.event.client_payload.deployment_type || 'full' }}
+  IMAGE_TAG: ${{ github.event.inputs.image_tag || github.event.client_payload.image_tag || 'latest' }}
+  DRY_RUN: ${{ github.event.inputs.dry_run || github.event.client_payload.dry_run || 'false' }}
+
+permissions:
+  id-token: write
+  contents: read
+  issues: write
+  pull-requests: write
+
+jobs:
+  # 🔍 Pre-deployment Validation
+  pre-deployment-validation:
+    name: 🔍 Pre-deployment Validation
+    runs-on: ${{ vars.RUNS_ON || 'ubuntu-latest' }}
+    if: ${{ github.event.inputs.skip_tests != 'true' && github.event.client_payload.skip_tests != 'true' }}
+    outputs:
+      validation-passed: ${{ steps.validation.outputs.passed }}
+      
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Validate deployment parameters
+        id: validation
+        run: |
+          echo "## 🔍 Pre-deployment Validation" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          # Validate environment
+          if [[ ! "${{ env.ENVIRONMENT }}" =~ ^(dev|production)$ ]]; then
+            echo "❌ Invalid environment: ${{ env.ENVIRONMENT }}" >> $GITHUB_STEP_SUMMARY
+            echo "passed=false" >> $GITHUB_OUTPUT
+            exit 1
+          fi
+          
+          # Validate image tag format
+          if [[ ! "${{ env.IMAGE_TAG }}" =~ ^[a-zA-Z0-9._-]+$ ]]; then
+            echo "❌ Invalid image tag format: ${{ env.IMAGE_TAG }}" >> $GITHUB_STEP_SUMMARY
+            echo "passed=false" >> $GITHUB_OUTPUT
+            exit 1
+          fi
+          
+          # Check if it's a production deployment
+          if [[ "${{ env.ENVIRONMENT }}" == "production" ]]; then
+            if [[ "${{ github.actor }}" != "github-actions[bot]" ]]; then
+              echo "⚠️ Production deployment requires manual approval" >> $GITHUB_STEP_SUMMARY
+            fi
+          fi
+          
+          echo "✅ Environment: ${{ env.ENVIRONMENT }}" >> $GITHUB_STEP_SUMMARY
+          echo "✅ Deployment type: ${{ env.DEPLOYMENT_TYPE }}" >> $GITHUB_STEP_SUMMARY
+          echo "✅ Image tag: ${{ env.IMAGE_TAG }}" >> $GITHUB_STEP_SUMMARY
+          echo "✅ Dry run: ${{ env.DRY_RUN }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "passed=true" >> $GITHUB_OUTPUT
+
+      - name: Check deployment readiness
+        run: |
+          echo "### 🎯 Deployment Readiness Check" >> $GITHUB_STEP_SUMMARY
+          
+          # Check if infrastructure is ready for application deployment
+          if [[ "${{ env.DEPLOYMENT_TYPE }}" == "application-only" || "${{ env.DEPLOYMENT_TYPE }}" == "full" ]]; then
+            echo "- 🏗️ Infrastructure readiness: Required" >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          # Check environment-specific requirements
+          case "${{ env.ENVIRONMENT }}" in
+            "production")
+              echo "- 🔒 Production checks: Required" >> $GITHUB_STEP_SUMMARY
+              echo "- 👥 Manual approval: Required" >> $GITHUB_STEP_SUMMARY
+              echo "- 📊 Monitoring: Required" >> $GITHUB_STEP_SUMMARY
+              ;;
+            "dev")
+              echo "- ⚡ Fast deployment: Enabled" >> $GITHUB_STEP_SUMMARY
+              echo "- 🔧 Debug mode: Available" >> $GITHUB_STEP_SUMMARY
+              ;;
+          esac
+
+  # 🎛️ Production Approval Gate
+  production-approval:
+    name: 🎛️ Production Approval
+    runs-on: ubuntu-latest
+    needs: pre-deployment-validation
+    if: |
+      env.ENVIRONMENT == 'production' && 
+      needs.pre-deployment-validation.outputs.validation-passed == 'true' &&
+      env.DRY_RUN != 'true'
+    environment:
+      name: production-approval
+      
+    steps:
+      - name: Generate GitHub App Token
+        uses: actions/create-github-app-token@v2
+        id: app-token
+        with:
+          app-id: ${{ vars.APP_ID }}
+          private-key: ${{ secrets.PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+
+      - name: Production Deployment Approval
+        uses: trstringer/manual-approval@v1
+        timeout-minutes: 60
+        with:
+          secret: ${{ steps.app-token.outputs.token }}
+          approvers: ${{ vars.PRODUCTION_APPROVERS || github.repository_owner }}
+          minimum-approvals: 1
+          issue-title: "🚨 Production Deployment Approval: ${{ env.DEPLOYMENT_TYPE }}"
+          issue-body: |
+            ## 🎯 **Production Deployment Request**
+            
+            **Environment:** 🏭 Production
+            **Type:** ${{ env.DEPLOYMENT_TYPE }}
+            **Image:** ${{ env.IMAGE_TAG }}
+            **Initiated by:** ${{ github.actor }}
+            **Workflow:** ${{ github.run_id }}
+            
+            ### 📋 **Deployment Details**
+            
+            | Parameter | Value |
+            |-----------|-------|
+            | **Environment** | ${{ env.ENVIRONMENT }} |
+            | **Deployment Type** | ${{ env.DEPLOYMENT_TYPE }} |
+            | **Container Image** | ${{ env.IMAGE_TAG }} |
+            | **Initiated By** | ${{ github.actor }} |
+            | **Workflow Run** | [${{ github.run_id }}](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}) |
+            
+            ### ⚠️ **Production Safety Checklist**
+            
+            **Before approving, please verify:**
+            
+            - [ ] **Code Review**: All changes have been reviewed and approved
+            - [ ] **Testing**: Full test suite has passed in development
+            - [ ] **Security**: Security scans show no critical issues
+            - [ ] **Dependencies**: No known vulnerable dependencies
+            - [ ] **Infrastructure**: Infrastructure is stable and ready
+            - [ ] **Monitoring**: Monitoring and alerting are operational
+            - [ ] **Rollback Plan**: Rollback procedure is documented and tested
+            - [ ] **Business Impact**: Deployment timing is appropriate
+            - [ ] **Communication**: Stakeholders have been notified if required
+            
+            ### 🏗️ **What Will Be Deployed**
+            
+            ```
+            ${{ env.DEPLOYMENT_TYPE == 'infrastructure-only' && 'Infrastructure stack updates only' || '' }}
+            ${{ env.DEPLOYMENT_TYPE == 'application-only' && 'Application container deployment only' || '' }}
+            ${{ env.DEPLOYMENT_TYPE == 'full' && 'Complete infrastructure + application deployment' || '' }}
+            ```
+            
+            ### 🔗 **Reference Links**
+            
+            - **Workflow Run:** https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
+            - **Infrastructure Code:** https://github.com/${{ github.repository }}/tree/${{ github.sha }}/infrastructure
+            - **Application Code:** https://github.com/${{ github.repository }}/tree/${{ github.sha }}/src
+            - **Container Image:** ${{ env.IMAGE_TAG }}
+            
+            ### ✅ **Approval Instructions**
+            
+            **Authorized Approvers:** ${{ vars.PRODUCTION_APPROVERS || github.repository_owner }}
+            
+            To **approve** this deployment:
+            - Comment: `approved`, `approve`, `lgtm`, or `✅`
+            
+            To **reject** this deployment:
+            - Comment: `rejected`, `reject`, `denied`, or `❌`
+            
+            **Security Note:** This approval gate is required for all production deployments as per security policy.
+            
+            ---
+            
+            ### 🛑 **Emergency Contact**
+            
+            For urgent deployments, contact: ${{ vars.EMERGENCY_CONTACT || 'On-call team' }}
+
+  # 🏗️ Infrastructure Deployment
+  deploy-infrastructure:
+    name: 🏗️ Deploy Infrastructure
+    runs-on: ${{ vars.RUNS_ON || 'ubuntu-latest' }}
+    needs: [pre-deployment-validation, production-approval]
+    if: |
+      always() && 
+      needs.pre-deployment-validation.outputs.validation-passed == 'true' &&
+      (env.DEPLOYMENT_TYPE == 'infrastructure-only' || env.DEPLOYMENT_TYPE == 'full') &&
+      (env.ENVIRONMENT != 'production' || needs.production-approval.result == 'success')
+    environment:
+      name: ${{ env.ENVIRONMENT }}
+      
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4.3.1
+        with:
+          role-to-assume: arn:aws:iam::892193016253:role/github-actions-role
+          role-session-name: github-actions
+          aws-region: us-east-1
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: 'npm'
+          cache-dependency-path: infrastructure/package-lock.json
+
+      - name: Install infrastructure dependencies
+        run: |
+          cd infrastructure
+          npm ci --prefer-offline
+
+      - name: Build infrastructure
+        run: |
+          cd infrastructure
+          npm run build
+
+      - name: Acknowledge CDK notices
+        run: |
+          cd infrastructure
+          npx cdk acknowledge 34892 34635 || true
+
+      - name: Infrastructure deployment (dry run)
+        if: env.DRY_RUN == 'true'
+        run: |
+          cd infrastructure
+          echo "## 🔍 Infrastructure Dry Run Results" >> $GITHUB_STEP_SUMMARY
+          echo "Performing CDK diff for ${{ env.ENVIRONMENT }} environment..." >> $GITHUB_STEP_SUMMARY
+          
+          # Show what would change
+          npx cdk diff TestApp-VPC-${{ env.ENVIRONMENT }} --context environment=${{ env.ENVIRONMENT }} || true
+          npx cdk diff TestApp-Platform-${{ env.ENVIRONMENT }} --context environment=${{ env.ENVIRONMENT }} || true
+          npx cdk diff TestApp-App-${{ env.ENVIRONMENT }} --context environment=${{ env.ENVIRONMENT }} || true
+
+      - name: Wait for existing stack operations
+        if: env.DRY_RUN != 'true'
+        timeout-minutes: 30
+        run: |
+          echo "## ⏳ Checking for Active Stack Operations" >> $GITHUB_STEP_SUMMARY
+          
+          # Function to wait for stack to be in a stable state
+          wait_for_stack() {
+            local stack_name=$1
+            local max_attempts=30
+            local attempt=1
+            
+            echo "Checking stack: $stack_name"
+            
+            while [ $attempt -le $max_attempts ]; do
+              status=$(aws cloudformation describe-stacks --stack-name $stack_name --query 'Stacks[0].StackStatus' --output text 2>/dev/null || echo "NOT_FOUND")
+              
+              case $status in
+                "CREATE_COMPLETE"|"UPDATE_COMPLETE"|"ROLLBACK_COMPLETE"|"UPDATE_ROLLBACK_COMPLETE"|"NOT_FOUND")
+                  echo "✅ Stack $stack_name is ready (Status: $status)"
+                  return 0
+                  ;;
+                "CREATE_IN_PROGRESS"|"UPDATE_IN_PROGRESS"|"DELETE_IN_PROGRESS"|"ROLLBACK_IN_PROGRESS"|"UPDATE_ROLLBACK_IN_PROGRESS")
+                  echo "⏳ Stack $stack_name is busy (Status: $status), waiting... (attempt $attempt/$max_attempts)"
+                  sleep 60
+                  ;;
+                "CREATE_FAILED"|"UPDATE_FAILED"|"DELETE_FAILED")
+                  echo "❌ Stack $stack_name is in failed state: $status"
+                  return 1
+                  ;;
+                *)
+                  echo "⚠️ Unknown stack status: $status"
+                  sleep 30
+                  ;;
+              esac
+              
+              attempt=$((attempt + 1))
+            done
+            
+            echo "❌ Timeout waiting for stack $stack_name to be ready"
+            return 1
+          }
+          
+          # Wait for each stack to be ready
+          wait_for_stack "TestApp-VPC-${{ env.ENVIRONMENT }}" || true
+          wait_for_stack "TestApp-Platform-${{ env.ENVIRONMENT }}" || true
+          wait_for_stack "TestApp-App-${{ env.ENVIRONMENT }}" || true
+          
+          echo "✅ All stacks are ready for deployment" >> $GITHUB_STEP_SUMMARY
+
+      - name: Deploy infrastructure stacks
+        if: env.DRY_RUN != 'true'
+        run: |
+          cd infrastructure
+          
+          echo "## 🏗️ Infrastructure Deployment Progress" >> $GITHUB_STEP_SUMMARY
+          
+          # Deploy in dependency order
+          echo "### 1. Deploying VPC Stack..." >> $GITHUB_STEP_SUMMARY
+          npx cdk deploy TestApp-VPC-${{ env.ENVIRONMENT }} --require-approval never --context environment=${{ env.ENVIRONMENT }}
+          
+          echo "### 2. Deploying Platform Stack..." >> $GITHUB_STEP_SUMMARY
+          npx cdk deploy TestApp-Platform-${{ env.ENVIRONMENT }} --require-approval never --context environment=${{ env.ENVIRONMENT }}
+          
+          echo "### 3. Deploying Application Stack..." >> $GITHUB_STEP_SUMMARY
+          npx cdk deploy TestApp-App-${{ env.ENVIRONMENT }} --require-approval never --context environment=${{ env.ENVIRONMENT }} --outputs-file outputs.json
+          
+          # Extract outputs for next jobs
+          if [[ -f outputs.json ]]; then
+            APPLICATION_URL=$(jq -r '.["TestApp-App-'${{ env.ENVIRONMENT }}'"]["ApplicationUrl"] // empty' outputs.json)
+            if [[ -n "$APPLICATION_URL" ]]; then
+              echo "APPLICATION_URL=$APPLICATION_URL" >> $GITHUB_ENV
+            fi
+          fi
+          
+          echo "### ✅ Infrastructure Deployment Complete" >> $GITHUB_STEP_SUMMARY
+
+      - name: Infrastructure deployment summary
+        run: |
+          echo "## 🎯 Infrastructure Deployment Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Parameter | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|-----------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Environment | ${{ env.ENVIRONMENT }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Deployment Type | ${{ env.DEPLOYMENT_TYPE }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Dry Run | ${{ env.DRY_RUN }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Stack Status | ${{ env.DRY_RUN == 'true' && 'Simulated' || 'Deployed' }} |" >> $GITHUB_STEP_SUMMARY
+          
+          if [[ -n "$APPLICATION_URL" ]]; then
+            echo "| Application URL | $APPLICATION_URL |" >> $GITHUB_STEP_SUMMARY
+          fi
+
+  # 🚀 Application Deployment
+  deploy-application:
+    name: 🚀 Deploy Application
+    runs-on: ${{ vars.RUNS_ON || 'ubuntu-latest' }}
+    needs: [pre-deployment-validation, production-approval, deploy-infrastructure]
+    if: |
+      always() && 
+      needs.pre-deployment-validation.outputs.validation-passed == 'true' &&
+      (env.DEPLOYMENT_TYPE == 'application-only' || env.DEPLOYMENT_TYPE == 'full') &&
+      (env.ENVIRONMENT != 'production' || needs.production-approval.result == 'success') &&
+      (env.DEPLOYMENT_TYPE == 'application-only' || needs.deploy-infrastructure.result == 'success')
+    environment:
+      name: ${{ env.ENVIRONMENT }}
+      
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4.3.1
+        with:
+          role-to-assume: arn:aws:iam::892193016253:role/github-actions-role
+          role-session-name: github-actions
+          aws-region: us-east-1
+
+      - name: Update ECS service (dry run)
+        if: env.DRY_RUN == 'true'
+        run: |
+          echo "## 🔍 Application Deployment Dry Run" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Would deploy:**" >> $GITHUB_STEP_SUMMARY
+          echo "- Container image: \`${{ env.IMAGE_TAG }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- Target environment: \`${{ env.ENVIRONMENT }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- ECS service: \`testapp-service-${{ env.ENVIRONMENT }}\`" >> $GITHUB_STEP_SUMMARY
+          
+          # Get current service status
+          aws ecs describe-services \
+            --cluster testapp-cluster-${{ env.ENVIRONMENT }} \
+            --services testapp-service-${{ env.ENVIRONMENT }} \
+            --query 'services[0].{RunningCount:runningCount,PendingCount:pendingCount,DesiredCount:desiredCount,TaskDefinition:taskDefinition}' \
+            --output table || echo "Service not found or not accessible"
+
+      - name: Deploy new application version
+        if: env.DRY_RUN != 'true'
+        run: |
+          echo "## 🚀 Application Deployment Progress" >> $GITHUB_STEP_SUMMARY
+          
+          # Get ECR repository URI
+          ECR_URI=$(aws ecr describe-repositories --repository-names testapp-${{ env.ENVIRONMENT }} --query 'repositories[0].repositoryUri' --output text 2>/dev/null || echo "")
+          
+          if [[ -z "$ECR_URI" ]]; then
+            echo "❌ ECR repository not found for ${{ env.ENVIRONMENT }}" >> $GITHUB_STEP_SUMMARY
+            exit 1
+          fi
+          
+          FULL_IMAGE_URI="${ECR_URI}:${{ env.IMAGE_TAG }}"
+          echo "Deploying image: $FULL_IMAGE_URI" >> $GITHUB_STEP_SUMMARY
+          
+          # Get current task definition
+          CURRENT_TASK_DEF=$(aws ecs describe-services \
+            --cluster testapp-cluster-${{ env.ENVIRONMENT }} \
+            --services testapp-service-${{ env.ENVIRONMENT }} \
+            --query 'services[0].taskDefinition' \
+            --output text)
+          
+          if [[ "$CURRENT_TASK_DEF" == "None" ]]; then
+            echo "❌ ECS service not found" >> $GITHUB_STEP_SUMMARY
+            exit 1
+          fi
+          
+          # Create new task definition with updated image
+          aws ecs describe-task-definition --task-definition $CURRENT_TASK_DEF --query 'taskDefinition' > current-task-def.json
+          
+          # Update image in task definition
+          jq --arg image "$FULL_IMAGE_URI" '.containerDefinitions[0].image = $image | del(.taskDefinitionArn, .revision, .status, .requiresAttributes, .placementConstraints, .compatibilities, .registeredAt, .registeredBy)' current-task-def.json > new-task-def.json
+          
+          # Register new task definition
+          NEW_TASK_DEF_ARN=$(aws ecs register-task-definition --cli-input-json file://new-task-def.json --query 'taskDefinition.taskDefinitionArn' --output text)
+          
+          echo "New task definition: $NEW_TASK_DEF_ARN" >> $GITHUB_STEP_SUMMARY
+          
+          # Update service
+          aws ecs update-service \
+            --cluster testapp-cluster-${{ env.ENVIRONMENT }} \
+            --service testapp-service-${{ env.ENVIRONMENT }} \
+            --task-definition $NEW_TASK_DEF_ARN
+          
+          echo "### ✅ Application Deployment Initiated" >> $GITHUB_STEP_SUMMARY
+          echo "ECS service is updating..." >> $GITHUB_STEP_SUMMARY
+
+  # 🔍 Post-deployment Validation
+  post-deployment-validation:
+    name: 🔍 Post-deployment Validation
+    runs-on: ${{ vars.RUNS_ON || 'ubuntu-latest' }}
+    needs: [deploy-infrastructure, deploy-application]
+    if: |
+      always() && 
+      env.DRY_RUN != 'true' &&
+      (needs.deploy-infrastructure.result == 'success' || needs.deploy-application.result == 'success')
+      
+    steps:
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4.3.1
+        with:
+          role-to-assume: arn:aws:iam::892193016253:role/github-actions-role
+          role-session-name: github-actions
+          aws-region: us-east-1
+
+      - name: Wait for deployment to stabilize
+        if: env.DEPLOYMENT_TYPE != 'infrastructure-only'
+        run: |
+          echo "## 🔄 Deployment Stabilization" >> $GITHUB_STEP_SUMMARY
+          echo "Waiting for ECS service to stabilize..." >> $GITHUB_STEP_SUMMARY
+          
+          aws ecs wait services-stable \
+            --cluster testapp-cluster-${{ env.ENVIRONMENT }} \
+            --services testapp-service-${{ env.ENVIRONMENT }} \
+            --cli-read-timeout 600 \
+            --cli-connect-timeout 60
+          
+          echo "✅ ECS service is stable" >> $GITHUB_STEP_SUMMARY
+
+      - name: Health check validation
+        run: |
+          echo "### 🏥 Health Check Validation" >> $GITHUB_STEP_SUMMARY
+          
+          # Get application URL from load balancer
+          LB_DNS=$(aws elbv2 describe-load-balancers \
+            --names testapp-alb-${{ env.ENVIRONMENT }} \
+            --query 'LoadBalancers[0].DNSName' \
+            --output text 2>/dev/null || echo "")
+          
+          if [[ -n "$LB_DNS" ]]; then
+            APP_URL="http://${LB_DNS}"
+            echo "Testing application at: $APP_URL" >> $GITHUB_STEP_SUMMARY
+            
+            # Test health endpoint with retries
+            for i in {1..10}; do
+              if curl -sf "${APP_URL}/health/" > /dev/null; then
+                echo "✅ Health check passed on attempt $i" >> $GITHUB_STEP_SUMMARY
+                echo "APPLICATION_HEALTHY=true" >> $GITHUB_ENV
+                break
+              else
+                echo "⏳ Health check failed on attempt $i, retrying..." >> $GITHUB_STEP_SUMMARY
+                sleep 30
+              fi
+            done
+            
+            if [[ "$APPLICATION_HEALTHY" != "true" ]]; then
+              echo "❌ Application health check failed after 10 attempts" >> $GITHUB_STEP_SUMMARY
+              exit 1
+            fi
+          else
+            echo "⚠️ Could not determine application URL for health check" >> $GITHUB_STEP_SUMMARY
+          fi
+
+  # 📊 Deployment Summary
+  deployment-summary:
+    name: 📊 Deployment Summary
+    runs-on: ubuntu-latest
+    needs: [pre-deployment-validation, production-approval, deploy-infrastructure, deploy-application, post-deployment-validation]
+    if: always()
+    
+    steps:
+      - name: Generate comprehensive summary
+        run: |
+          echo "# 🎯 **Controlled Deployment Summary**" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "## 📋 **Deployment Configuration**" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Parameter | Value | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|-----------|-------|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| **Environment** | ${{ env.ENVIRONMENT }} | 🎯 |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Deployment Type** | ${{ env.DEPLOYMENT_TYPE }} | 🎯 |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Image Tag** | ${{ env.IMAGE_TAG }} | 🎯 |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Dry Run** | ${{ env.DRY_RUN }} | 🎯 |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Initiated By** | ${{ github.actor }} | 👤 |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "## 🚀 **Deployment Results**" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Stage | Result | Duration |" >> $GITHUB_STEP_SUMMARY
+          echo "|-------|--------|----------|" >> $GITHUB_STEP_SUMMARY
+          echo "| **Pre-validation** | ${{ needs.pre-deployment-validation.result || 'skipped' }} | - |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Production Approval** | ${{ needs.production-approval.result || 'skipped' }} | - |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Infrastructure** | ${{ needs.deploy-infrastructure.result || 'skipped' }} | - |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Application** | ${{ needs.deploy-application.result || 'skipped' }} | - |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Post-validation** | ${{ needs.post-deployment-validation.result || 'skipped' }} | - |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          # Overall status
+          if [[ "${{ needs.post-deployment-validation.result }}" == "success" ]] || [[ "${{ env.DRY_RUN }}" == "true" ]]; then
+            echo "## ✅ **Deployment Status: SUCCESS**" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "## ❌ **Deployment Status: FAILED**" >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### 🔗 **Quick Links**" >> $GITHUB_STEP_SUMMARY
+          echo "- **Workflow Run:** https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Environment:** ${{ env.ENVIRONMENT }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **AWS Console:** [ECS Service](https://console.aws.amazon.com/ecs/)" >> $GITHUB_STEP_SUMMARY

@@ -1,0 +1,809 @@
+name: Incident Response & Rollback Automation
+
+on:
+  workflow_dispatch:
+    inputs:
+      incident_type:
+        description: 'Type of incident'
+        required: true
+        type: choice
+        options: ['deployment-failure', 'application-outage', 'security-breach', 'performance-degradation', 'infrastructure-issue', 'data-corruption']
+      
+      environment:
+        description: 'Affected environment'
+        required: true
+        type: choice
+        options: ['dev', 'production', 'all']
+        
+      severity:
+        description: 'Incident severity'
+        required: true
+        type: choice
+        default: 'medium'
+        options: ['low', 'medium', 'high', 'critical']
+        
+      rollback_target:
+        description: 'Rollback to specific version/commit'
+        required: false
+        type: string
+        
+      auto_rollback:
+        description: 'Perform automatic rollback'
+        required: false
+        type: boolean
+        default: false
+        
+      notification_level:
+        description: 'Notification level'
+        required: false
+        type: choice
+        default: 'team'
+        options: ['team', 'management', 'stakeholders', 'public']
+
+  repository_dispatch:
+    types: [incident-alert]
+    
+  # Trigger on critical monitoring alerts
+  workflow_call:
+    inputs:
+      incident_type:
+        required: true
+        type: string
+      environment:
+        required: true
+        type: string
+      severity:
+        required: true
+        type: string
+      auto_rollback:
+        required: false
+        type: boolean
+        default: false
+
+env:
+  INCIDENT_TYPE: ${{ inputs.incident_type || github.event.client_payload.incident_type }}
+  AFFECTED_ENV: ${{ inputs.environment || github.event.client_payload.environment }}
+  SEVERITY: ${{ inputs.severity || github.event.client_payload.severity || 'medium' }}
+  ROLLBACK_TARGET: ${{ inputs.rollback_target || github.event.client_payload.rollback_target || '' }}
+  AUTO_ROLLBACK: ${{ inputs.auto_rollback || github.event.client_payload.auto_rollback || 'false' }}
+  NOTIFICATION_LEVEL: ${{ inputs.notification_level || github.event.client_payload.notification_level || 'team' }}
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+  id-token: write
+  actions: write
+
+jobs:
+  # 🚨 Incident Assessment & Triage
+  incident-assessment:
+    name: 🚨 Incident Assessment
+    runs-on: ubuntu-latest
+    outputs:
+      incident-id: ${{ steps.create-incident.outputs.incident_id }}
+      response-plan: ${{ steps.assess.outputs.response_plan }}
+      requires-rollback: ${{ steps.assess.outputs.requires_rollback }}
+      escalation-level: ${{ steps.assess.outputs.escalation_level }}
+      
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Assess incident severity and impact
+        id: assess
+        run: |
+          echo "## 🚨 Incident Response Activated" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          # Determine escalation level and response plan
+          ESCALATION_LEVEL="L1"  # Default
+          RESPONSE_PLAN="standard"
+          REQUIRES_ROLLBACK="false"
+          ETA_RESOLUTION="30m"
+          
+          case "${{ env.SEVERITY }}" in
+            "critical")
+              ESCALATION_LEVEL="L0"
+              RESPONSE_PLAN="emergency"
+              REQUIRES_ROLLBACK="true"
+              ETA_RESOLUTION="15m"
+              ;;
+            "high")
+              ESCALATION_LEVEL="L1"
+              RESPONSE_PLAN="urgent"
+              REQUIRES_ROLLBACK="true"
+              ETA_RESOLUTION="1h"
+              ;;
+            "medium")
+              ESCALATION_LEVEL="L2"
+              RESPONSE_PLAN="standard"
+              ETA_RESOLUTION="2h"
+              ;;
+            "low")
+              ESCALATION_LEVEL="L3"
+              RESPONSE_PLAN="routine"
+              ETA_RESOLUTION="4h"
+              ;;
+          esac
+          
+          # Adjust based on incident type
+          case "${{ env.INCIDENT_TYPE }}" in
+            "security-breach")
+              ESCALATION_LEVEL="L0"
+              RESPONSE_PLAN="security-emergency"
+              ;;
+            "deployment-failure"|"application-outage")
+              if [ "${{ env.AFFECTED_ENV }}" = "production" ]; then
+                REQUIRES_ROLLBACK="true"
+              fi
+              ;;
+            "data-corruption")
+              ESCALATION_LEVEL="L0"
+              RESPONSE_PLAN="data-emergency"
+              ;;
+          esac
+          
+          # Set outputs
+          echo "escalation_level=$ESCALATION_LEVEL" >> $GITHUB_OUTPUT
+          echo "response_plan=$RESPONSE_PLAN" >> $GITHUB_OUTPUT
+          echo "requires_rollback=$REQUIRES_ROLLBACK" >> $GITHUB_OUTPUT
+          
+          # Summary
+          echo "### 📋 Incident Details:" >> $GITHUB_STEP_SUMMARY
+          echo "- **Type**: ${{ env.INCIDENT_TYPE }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Environment**: ${{ env.AFFECTED_ENV }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Severity**: ${{ env.SEVERITY }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Escalation Level**: $ESCALATION_LEVEL" >> $GITHUB_STEP_SUMMARY
+          echo "- **Response Plan**: $RESPONSE_PLAN" >> $GITHUB_STEP_SUMMARY
+          echo "- **ETA Resolution**: $ETA_RESOLUTION" >> $GITHUB_STEP_SUMMARY
+          echo "- **Requires Rollback**: $REQUIRES_ROLLBACK" >> $GITHUB_STEP_SUMMARY
+
+      - name: Create incident tracking issue
+        id: create-incident
+        uses: actions/github-script@v7
+        with:
+          result-encoding: string
+          script: |
+            const severityEmoji = {
+              'critical': '🔴',
+              'high': '🟠',
+              'medium': '🟡',
+              'low': '🟢'
+            };
+            
+            const incidentEmoji = {
+              'deployment-failure': '🚀',
+              'application-outage': '💥',
+              'security-breach': '🔐',
+              'performance-degradation': '⚡',
+              'infrastructure-issue': '🏗️',
+              'data-corruption': '💾'
+            };
+            
+            const severity = '${{ env.SEVERITY }}';
+            const incidentType = '${{ env.INCIDENT_TYPE }}';
+            const environment = '${{ env.AFFECTED_ENV }}';
+            const escalationLevel = '${{ steps.assess.outputs.escalation_level }}';
+            const responsePlan = '${{ steps.assess.outputs.response_plan }}';
+            
+            const incidentId = `INC-${Date.now()}`;
+            
+            const issueBody = `## ${severityEmoji[severity]} **INCIDENT RESPONSE ACTIVATED**
+            
+            ### 📊 **Incident Summary**
+            
+            | Parameter | Value |
+            |-----------|-------|
+            | **Incident ID** | \`${incidentId}\` |
+            | **Type** | ${incidentEmoji[incidentType] || '⚠️'} ${incidentType.replace('-', ' ').toUpperCase()} |
+            | **Environment** | \`${environment}\` |
+            | **Severity** | ${severityEmoji[severity]} **${severity.toUpperCase()}** |
+            | **Escalation Level** | **${escalationLevel}** |
+            | **Response Plan** | **${responsePlan}** |
+            | **Status** | 🟡 **ACTIVE** |
+            | **Started** | ${new Date().toISOString()} |
+            | **Workflow** | [${{ github.run_id }}](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}) |
+            
+            ### 🎯 **Impact Assessment**
+            
+            **Affected Systems:**
+            - Environment: ${environment}
+            - Application components: TBD
+            - Infrastructure components: TBD
+            - Data systems: TBD
+            
+            **Business Impact:**
+            - User impact: ${severity === 'critical' ? 'SEVERE - Service unavailable' : severity === 'high' ? 'HIGH - Service degraded' : 'LIMITED - Minor impact'}
+            - Service availability: ${severity === 'critical' ? 'DOWN' : severity === 'high' ? 'DEGRADED' : 'AVAILABLE'}
+            - Data integrity: ${incidentType === 'data-corruption' ? 'AT RISK' : 'INTACT'}
+            
+            ### 🚨 **Response Actions**
+            
+            **Immediate Actions (${escalationLevel === 'L0' ? '0-15min' : escalationLevel === 'L1' ? '0-30min' : '0-60min'}):**
+            - [ ] **Incident Commander assigned**: @${context.actor}
+            - [ ] **War room established** (if L0/L1)
+            - [ ] **Stakeholder notification** sent
+            - [ ] **System health assessment** completed
+            - [ ] **Impact analysis** documented
+            ${responsePlan === 'emergency' || responsePlan === 'security-emergency' ? '- [ ] **Emergency escalation** activated' : ''}
+            
+            **Investigation Actions:**
+            - [ ] **Root cause analysis** initiated
+            - [ ] **Log analysis** completed
+            - [ ] **Monitoring data** reviewed
+            - [ ] **Recent changes** identified
+            - [ ] **Timeline reconstruction** completed
+            
+            **Recovery Actions:**
+            - [ ] **Recovery plan** determined
+            ${steps.assess.outputs.requires_rollback === 'true' ? '- [ ] **Rollback initiated** (if applicable)' : ''}
+            - [ ] **Service restoration** attempted
+            - [ ] **System verification** completed
+            - [ ] **Performance validation** done
+            
+            ### 📈 **Status Timeline**
+            
+            | Time | Status | Action | Owner |
+            |------|--------|--------|-------|
+            | ${new Date().toISOString()} | 🚨 **DETECTED** | Incident response activated | @${context.actor} |
+            | | | | |
+            
+            ### 🔗 **Response Resources**
+            
+            **Monitoring:**
+            - [CloudWatch Dashboard](https://console.aws.amazon.com/cloudwatch/home#dashboards:name=TestApp-${environment}-Overview)
+            - [Application Logs](https://console.aws.amazon.com/cloudwatch/home#logsV2:log-groups)
+            - [ECS Service](https://console.aws.amazon.com/ecs/home#clusters)
+            
+            **Runbooks:**
+            - [Incident Response Procedures](https://github.com/${{ github.repository }}/blob/main/docs/incident-response.md)
+            - [Rollback Procedures](https://github.com/${{ github.repository }}/blob/main/docs/rollback-guide.md)
+            - [Recovery Procedures](https://github.com/${{ github.repository }}/blob/main/docs/recovery-guide.md)
+            
+            **Escalation:**
+            - **L0/L1**: ${vars.EMERGENCY_CONTACT || 'On-call team'}
+            - **L2/L3**: ${vars.TEAM_LEAD || 'Team lead'}
+            - **Security**: ${vars.SECURITY_CONTACT || 'Security team'}
+            
+            ### 📊 **Service Level Objectives**
+            
+            **Recovery Time Objectives:**
+            - **${severity}**: ${escalationLevel === 'L0' ? '15 minutes' : escalationLevel === 'L1' ? '1 hour' : escalationLevel === 'L2' ? '4 hours' : '8 hours'}
+            - **Detection to Acknowledgment**: 5 minutes
+            - **Acknowledgment to Resolution**: Based on severity
+            
+            ### 🔄 **Communication Plan**
+            
+            **Internal Communications:**
+            - Team notification: ✅ Automated
+            - Management notification: ${escalationLevel === 'L0' || escalationLevel === 'L1' ? '🟡 Required' : '⚪ Optional'}
+            - Stakeholder notification: ${'${{ env.NOTIFICATION_LEVEL }}' === 'stakeholders' ? '🟡 Required' : '⚪ As needed'}
+            
+            **External Communications:**
+            - Status page update: ${severity === 'critical' ? '🔴 Required' : severity === 'high' ? '🟡 Consider' : '⚪ Not needed'}
+            - Customer notification: ${severity === 'critical' ? '🔴 Required' : '⚪ As needed'}
+            
+            ---
+            
+            ### ⚡ **Quick Actions**
+            
+            **To update this incident:**
+            - Comment with status updates
+            - Use labels to track progress
+            - Update timeline table above
+            
+            **To resolve this incident:**
+            - Complete all action items
+            - Comment: \`resolved\` with resolution summary
+            - Conduct post-incident review
+            
+            **Emergency Contacts:**
+            - On-call: ${vars.EMERGENCY_CONTACT || 'Check escalation procedures'}
+            - Security: ${vars.SECURITY_CONTACT || 'security@company.com'}
+            - Management: ${vars.MANAGEMENT_CONTACT || 'Check escalation procedures'}
+            
+            ---
+            
+            **🤖 This incident was automatically detected and created by the incident response system.**
+            `;
+            
+            const issue = await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: `${severityEmoji[severity]} [${incidentId}] ${incidentEmoji[incidentType] || '⚠️'} ${incidentType.toUpperCase()} - ${environment.toUpperCase()}`,
+              body: issueBody,
+              labels: [
+                'incident-response',
+                `severity-${severity}`,
+                `type-${incidentType}`,
+                `env-${environment}`,
+                `level-${escalationLevel.toLowerCase()}`,
+                'status-active'
+              ]
+            });
+            
+            return incidentId;
+
+  # 🔄 Automatic Rollback (if enabled)
+  automatic-rollback:
+    name: 🔄 Automatic Rollback
+    runs-on: ${{ vars.RUNS_ON || 'ubuntu-latest' }}
+    needs: incident-assessment
+    if: |
+      needs.incident-assessment.outputs.requires-rollback == 'true' && 
+      (env.AUTO_ROLLBACK == 'true' || env.SEVERITY == 'critical')
+    environment:
+      name: ${{ env.AFFECTED_ENV }}
+      
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4.3.1
+        with:
+          role-to-assume: arn:aws:iam::892193016253:role/github-actions-role
+          role-session-name: github-actions
+          aws-region: us-east-1
+
+      - name: Determine rollback target
+        id: rollback-target
+        run: |
+          echo "## 🔄 Rollback Target Determination" >> $GITHUB_STEP_SUMMARY
+          
+          ROLLBACK_TARGET="${{ env.ROLLBACK_TARGET }}"
+          
+          if [ -z "$ROLLBACK_TARGET" ]; then
+            # Find last successful deployment
+            echo "Finding last successful deployment..." >> $GITHUB_STEP_SUMMARY
+            
+            # Check ECS service for last successful task definition
+            CURRENT_TASK_DEF=$(aws ecs describe-services \
+              --cluster testapp-cluster-${{ env.AFFECTED_ENV }} \
+              --services testapp-service-${{ env.AFFECTED_ENV }} \
+              --query 'services[0].taskDefinition' \
+              --output text 2>/dev/null || echo "")
+            
+            if [ -n "$CURRENT_TASK_DEF" ]; then
+              # Get previous revision
+              TASK_FAMILY=$(echo $CURRENT_TASK_DEF | cut -d'/' -f2 | cut -d':' -f1)
+              CURRENT_REVISION=$(echo $CURRENT_TASK_DEF | cut -d':' -f2)
+              PREVIOUS_REVISION=$((CURRENT_REVISION - 1))
+              
+              if [ "$PREVIOUS_REVISION" -gt 0 ]; then
+                ROLLBACK_TARGET="${TASK_FAMILY}:${PREVIOUS_REVISION}"
+                echo "Determined rollback target: $ROLLBACK_TARGET" >> $GITHUB_STEP_SUMMARY
+              fi
+            fi
+            
+            # Fallback: use previous commit
+            if [ -z "$ROLLBACK_TARGET" ]; then
+              ROLLBACK_TARGET=$(git rev-parse HEAD~1)
+              echo "Fallback rollback target: $ROLLBACK_TARGET" >> $GITHUB_STEP_SUMMARY
+            fi
+          fi
+          
+          echo "rollback_target=$ROLLBACK_TARGET" >> $GITHUB_OUTPUT
+          echo "- **Rollback Target**: $ROLLBACK_TARGET" >> $GITHUB_STEP_SUMMARY
+
+      - name: Execute application rollback
+        if: contains(env.INCIDENT_TYPE, 'application') || contains(env.INCIDENT_TYPE, 'deployment')
+        run: |
+          echo "### 🚀 Application Rollback" >> $GITHUB_STEP_SUMMARY
+          
+          ROLLBACK_TARGET="${{ steps.rollback-target.outputs.rollback_target }}"
+          
+          # Check if rollback target is a task definition
+          if [[ "$ROLLBACK_TARGET" == *":"* ]] && [[ "$ROLLBACK_TARGET" != *"/"* ]]; then
+            echo "Rolling back to task definition: $ROLLBACK_TARGET" >> $GITHUB_STEP_SUMMARY
+            
+            # Update ECS service to use previous task definition
+            aws ecs update-service \
+              --cluster testapp-cluster-${{ env.AFFECTED_ENV }} \
+              --service testapp-service-${{ env.AFFECTED_ENV }} \
+              --task-definition $ROLLBACK_TARGET
+            
+            echo "✅ ECS service rollback initiated" >> $GITHUB_STEP_SUMMARY
+            
+            # Wait for deployment to stabilize
+            echo "Waiting for deployment to stabilize..." >> $GITHUB_STEP_SUMMARY
+            aws ecs wait services-stable \
+              --cluster testapp-cluster-${{ env.AFFECTED_ENV }} \
+              --services testapp-service-${{ env.AFFECTED_ENV }} \
+              --cli-read-timeout 300 \
+              --cli-connect-timeout 60
+            
+            echo "✅ Application rollback completed" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "⚠️ Cannot perform automatic application rollback - manual intervention required" >> $GITHUB_STEP_SUMMARY
+          fi
+
+      - name: Execute infrastructure rollback
+        if: contains(env.INCIDENT_TYPE, 'infrastructure')
+        run: |
+          echo "### 🏗️ Infrastructure Rollback" >> $GITHUB_STEP_SUMMARY
+          echo "⚠️ **Infrastructure rollback requires manual review**" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Recommended actions:**" >> $GITHUB_STEP_SUMMARY
+          echo "1. Review infrastructure changes since last known good state" >> $GITHUB_STEP_SUMMARY
+          echo "2. Use CDK diff to compare current vs target state" >> $GITHUB_STEP_SUMMARY
+          echo "3. Apply infrastructure changes through normal CI/CD process" >> $GITHUB_STEP_SUMMARY
+          echo "4. Monitor infrastructure health after changes" >> $GITHUB_STEP_SUMMARY
+          
+          # For safety, we don't auto-rollback infrastructure
+          echo "Manual infrastructure review required - stopping automatic rollback" >> $GITHUB_STEP_SUMMARY
+
+      - name: Verify rollback success
+        run: |
+          echo "### ✅ Rollback Verification" >> $GITHUB_STEP_SUMMARY
+          
+          # Health check
+          echo "Performing post-rollback health check..." >> $GITHUB_STEP_SUMMARY
+          
+          # Get load balancer DNS
+          LB_DNS=$(aws elbv2 describe-load-balancers \
+            --names testapp-alb-${{ env.AFFECTED_ENV }} \
+            --query 'LoadBalancers[0].DNSName' \
+            --output text 2>/dev/null || echo "")
+          
+          if [ -n "$LB_DNS" ]; then
+            APP_URL="http://${LB_DNS}"
+            
+            # Test health endpoint
+            for i in {1..10}; do
+              if curl -sf "${APP_URL}/health/" > /dev/null 2>&1; then
+                echo "✅ Health check passed on attempt $i" >> $GITHUB_STEP_SUMMARY
+                echo "🎯 **Rollback appears successful**" >> $GITHUB_STEP_SUMMARY
+                break
+              else
+                echo "⏳ Health check failed on attempt $i, retrying..." >> $GITHUB_STEP_SUMMARY
+                sleep 15
+              fi
+              
+              if [ $i -eq 10 ]; then
+                echo "❌ Health check failed after 10 attempts" >> $GITHUB_STEP_SUMMARY
+                echo "🚨 **Rollback may have failed - manual intervention required**" >> $GITHUB_STEP_SUMMARY
+              fi
+            done
+          else
+            echo "⚠️ Could not determine application URL for health check" >> $GITHUB_STEP_SUMMARY
+          fi
+
+  # 📊 Health Assessment & Monitoring
+  health-assessment:
+    name: 📊 Health Assessment
+    runs-on: ubuntu-latest
+    needs: [incident-assessment, automatic-rollback]
+    if: always()
+    
+    steps:
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4.3.1
+        with:
+          role-to-assume: arn:aws:iam::892193016253:role/github-actions-role
+          role-session-name: github-actions
+          aws-region: us-east-1
+
+      - name: Comprehensive health check
+        id: health-check
+        run: |
+          echo "## 📊 System Health Assessment" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          OVERALL_HEALTH="HEALTHY"
+          ISSUES_FOUND=0
+          
+          # ECS Service Health
+          echo "### 🚀 ECS Service Health" >> $GITHUB_STEP_SUMMARY
+          
+          if aws ecs describe-services \
+               --cluster testapp-cluster-${{ env.AFFECTED_ENV }} \
+               --services testapp-service-${{ env.AFFECTED_ENV }} \
+               --query 'services[0].{RunningCount:runningCount,DesiredCount:desiredCount,Status:status}' \
+               --output table >> temp_ecs.txt 2>/dev/null; then
+            
+            cat temp_ecs.txt >> $GITHUB_STEP_SUMMARY
+            
+            # Check if service is healthy
+            RUNNING_COUNT=$(aws ecs describe-services \
+              --cluster testapp-cluster-${{ env.AFFECTED_ENV }} \
+              --services testapp-service-${{ env.AFFECTED_ENV }} \
+              --query 'services[0].runningCount' --output text)
+            
+            DESIRED_COUNT=$(aws ecs describe-services \
+              --cluster testapp-cluster-${{ env.AFFECTED_ENV }} \
+              --services testapp-service-${{ env.AFFECTED_ENV }} \
+              --query 'services[0].desiredCount' --output text)
+            
+            if [ "$RUNNING_COUNT" != "$DESIRED_COUNT" ]; then
+              echo "⚠️ **Service not fully healthy**: $RUNNING_COUNT/$DESIRED_COUNT running" >> $GITHUB_STEP_SUMMARY
+              OVERALL_HEALTH="DEGRADED"
+              ISSUES_FOUND=$((ISSUES_FOUND + 1))
+            else
+              echo "✅ **ECS Service healthy**: $RUNNING_COUNT/$DESIRED_COUNT running" >> $GITHUB_STEP_SUMMARY
+            fi
+          else
+            echo "❌ **Cannot access ECS service**" >> $GITHUB_STEP_SUMMARY
+            OVERALL_HEALTH="CRITICAL"
+            ISSUES_FOUND=$((ISSUES_FOUND + 1))
+          fi
+          
+          # Load Balancer Health
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### 🌐 Load Balancer Health" >> $GITHUB_STEP_SUMMARY
+          
+          if aws elbv2 describe-target-health \
+               --target-group-arn $(aws elbv2 describe-target-groups \
+                 --names testapp-tg-${{ env.AFFECTED_ENV }} \
+                 --query 'TargetGroups[0].TargetGroupArn' --output text 2>/dev/null) \
+               --output table >> temp_lb.txt 2>/dev/null; then
+            
+            cat temp_lb.txt >> $GITHUB_STEP_SUMMARY
+            
+            # Count healthy targets
+            HEALTHY_TARGETS=$(aws elbv2 describe-target-health \
+              --target-group-arn $(aws elbv2 describe-target-groups \
+                --names testapp-tg-${{ env.AFFECTED_ENV }} \
+                --query 'TargetGroups[0].TargetGroupArn' --output text 2>/dev/null) \
+              --query 'TargetHealthDescriptions[?TargetHealth.State==`healthy`] | length(@)' --output text 2>/dev/null || echo 0)
+            
+            if [ "$HEALTHY_TARGETS" -eq 0 ]; then
+              echo "❌ **No healthy targets**" >> $GITHUB_STEP_SUMMARY
+              OVERALL_HEALTH="CRITICAL"
+              ISSUES_FOUND=$((ISSUES_FOUND + 1))
+            else
+              echo "✅ **$HEALTHY_TARGETS healthy targets**" >> $GITHUB_STEP_SUMMARY
+            fi
+          else
+            echo "⚠️ **Cannot access load balancer health**" >> $GITHUB_STEP_SUMMARY
+            ISSUES_FOUND=$((ISSUES_FOUND + 1))
+          fi
+          
+          # Application Health
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### 🎯 Application Health" >> $GITHUB_STEP_SUMMARY
+          
+          LB_DNS=$(aws elbv2 describe-load-balancers \
+            --names testapp-alb-${{ env.AFFECTED_ENV }} \
+            --query 'LoadBalancers[0].DNSName' \
+            --output text 2>/dev/null || echo "")
+          
+          if [ -n "$LB_DNS" ]; then
+            APP_URL="http://${LB_DNS}"
+            
+            if curl -sf "${APP_URL}/health/" > /dev/null 2>&1; then
+              echo "✅ **Application responding to health checks**" >> $GITHUB_STEP_SUMMARY
+            else
+              echo "❌ **Application health check failing**" >> $GITHUB_STEP_SUMMARY
+              OVERALL_HEALTH="CRITICAL"
+              ISSUES_FOUND=$((ISSUES_FOUND + 1))
+            fi
+            
+            # Test main endpoint
+            RESPONSE_CODE=$(curl -s -o /dev/null -w "%{http_code}" "$APP_URL" || echo "000")
+            if [ "$RESPONSE_CODE" = "200" ]; then
+              echo "✅ **Main endpoint responding**: $RESPONSE_CODE" >> $GITHUB_STEP_SUMMARY
+            else
+              echo "⚠️ **Main endpoint issues**: $RESPONSE_CODE" >> $GITHUB_STEP_SUMMARY
+              if [ "$RESPONSE_CODE" = "000" ] || [ "$RESPONSE_CODE" = "500" ]; then
+                OVERALL_HEALTH="CRITICAL"
+              elif [ "$OVERALL_HEALTH" = "HEALTHY" ]; then
+                OVERALL_HEALTH="DEGRADED"
+              fi
+              ISSUES_FOUND=$((ISSUES_FOUND + 1))
+            fi
+          else
+            echo "❌ **Cannot determine application URL**" >> $GITHUB_STEP_SUMMARY
+            OVERALL_HEALTH="CRITICAL"
+            ISSUES_FOUND=$((ISSUES_FOUND + 1))
+          fi
+          
+          # CloudWatch Metrics Check
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### 📊 Recent Metrics" >> $GITHUB_STEP_SUMMARY
+          
+          # Check for recent errors (last 15 minutes)
+          ERROR_COUNT=$(aws cloudwatch get-metric-statistics \
+            --namespace AWS/ApplicationELB \
+            --metric-name HTTPCode_Target_5XX_Count \
+            --dimensions Name=LoadBalancer,Value=$(aws elbv2 describe-load-balancers \
+              --names testapp-alb-${{ env.AFFECTED_ENV }} \
+              --query 'LoadBalancers[0].LoadBalancerArn' --output text | cut -d'/' -f2-) \
+            --start-time $(date -u -d '15 minutes ago' +%Y-%m-%dT%H:%M:%S) \
+            --end-time $(date -u +%Y-%m-%dT%H:%M:%S) \
+            --period 300 \
+            --statistics Sum \
+            --query 'Datapoints[0].Sum' --output text 2>/dev/null || echo "None")
+          
+          if [ "$ERROR_COUNT" != "None" ] && [ "$ERROR_COUNT" != "" ] && [ "$ERROR_COUNT" -gt 0 ]; then
+            echo "⚠️ **Recent errors detected**: $ERROR_COUNT in last 15 minutes" >> $GITHUB_STEP_SUMMARY
+            if [ "$ERROR_COUNT" -gt 10 ]; then
+              OVERALL_HEALTH="DEGRADED"
+            fi
+            ISSUES_FOUND=$((ISSUES_FOUND + 1))
+          else
+            echo "✅ **No recent errors detected**" >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          # Set outputs
+          echo "overall_health=$OVERALL_HEALTH" >> $GITHUB_OUTPUT
+          echo "issues_found=$ISSUES_FOUND" >> $GITHUB_OUTPUT
+          
+          # Final summary
+          echo "" >> $GITHUB_STEP_SUMMARY
+          case "$OVERALL_HEALTH" in
+            "HEALTHY")
+              echo "## ✅ **Overall System Health: HEALTHY**" >> $GITHUB_STEP_SUMMARY
+              echo "All systems are operating normally." >> $GITHUB_STEP_SUMMARY
+              ;;
+            "DEGRADED")
+              echo "## 🟡 **Overall System Health: DEGRADED**" >> $GITHUB_STEP_SUMMARY
+              echo "System is functional but experiencing issues ($ISSUES_FOUND issues found)." >> $GITHUB_STEP_SUMMARY
+              ;;
+            "CRITICAL")
+              echo "## 🔴 **Overall System Health: CRITICAL**" >> $GITHUB_STEP_SUMMARY
+              echo "System is experiencing significant issues ($ISSUES_FOUND critical issues found)." >> $GITHUB_STEP_SUMMARY
+              ;;
+          esac
+
+  # 📱 Notification & Communication
+  incident-notification:
+    name: 📱 Notifications
+    runs-on: ubuntu-latest
+    needs: [incident-assessment, automatic-rollback, health-assessment]
+    if: always()
+    
+    steps:
+      - name: Send incident notifications
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const incidentId = '${{ needs.incident-assessment.outputs.incident-id }}';
+            const severity = '${{ env.SEVERITY }}';
+            const incidentType = '${{ env.INCIDENT_TYPE }}';
+            const environment = '${{ env.AFFECTED_ENV }}';
+            const rollbackPerformed = '${{ needs.automatic-rollback.result }}' === 'success';
+            const currentHealth = '${{ needs.health-assessment.outputs.overall_health || 'UNKNOWN' }}';
+            
+            const statusEmoji = {
+              'HEALTHY': '✅',
+              'DEGRADED': '🟡',
+              'CRITICAL': '🔴',
+              'UNKNOWN': '⚪'
+            };
+            
+            // Update incident issue with current status
+            try {
+              const issues = await github.rest.issues.listForRepo({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                labels: 'incident-response,status-active',
+                state: 'open',
+                per_page: 1
+              });
+              
+              if (issues.data.length > 0) {
+                const issue = issues.data[0];
+                
+                const updateComment = `## 🔄 **Incident Status Update**
+                
+                **Time**: ${new Date().toISOString()}
+                **Status**: ${statusEmoji[currentHealth]} System Health: **${currentHealth}**
+                
+                ### 📊 **Response Summary:**
+                - **Automatic Rollback**: ${rollbackPerformed ? '✅ Completed' : '❌ Not performed'}
+                - **Health Assessment**: ${statusEmoji[currentHealth]} ${currentHealth}
+                - **Issues Found**: ${{ needs.health-assessment.outputs.issues_found || '0' }}
+                - **Response Time**: ${Math.round((Date.now() - new Date(issue.created_at).getTime()) / 1000 / 60)} minutes
+                
+                ### 🎯 **Next Actions:**
+                ${currentHealth === 'HEALTHY' 
+                  ? '- ✅ **System recovered** - Consider resolving incident after validation\n- 📝 Schedule post-incident review' 
+                  : currentHealth === 'DEGRADED'
+                    ? '- 🟡 **Continued monitoring** required\n- 🔍 **Investigation** ongoing\n- ⚠️ **Manual intervention** may be needed'
+                    : '- 🔴 **Immediate action** required\n- 🚨 **Escalate** to next level\n- 🆘 **Consider manual rollback** or emergency procedures'
+                }
+                
+                ---
+                
+                **Updated by**: Automated Incident Response System
+                **Workflow**: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
+                `;
+                
+                await github.rest.issues.createComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: issue.number,
+                  body: updateComment
+                });
+                
+                // Update labels based on current health
+                const currentLabels = issue.labels.map(label => typeof label === 'string' ? label : label.name);
+                const newLabels = currentLabels.filter(label => !label.startsWith('health-'));
+                newLabels.push(`health-${currentHealth.toLowerCase()}`);
+                
+                if (currentHealth === 'HEALTHY') {
+                  // Remove status-active and add status-recovering
+                  const finalLabels = newLabels.filter(label => label !== 'status-active');
+                  finalLabels.push('status-recovering');
+                  
+                  await github.rest.issues.update({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    issue_number: issue.number,
+                    labels: finalLabels
+                  });
+                }
+                
+                console.log(`Updated incident issue #${issue.number} with status: ${currentHealth}`);
+              }
+            } catch (error) {
+              console.error('Error updating incident issue:', error);
+            }
+
+  # 📋 Incident Summary & Post-mortem Prep
+  incident-summary:
+    name: 📋 Incident Summary
+    runs-on: ubuntu-latest
+    needs: [incident-assessment, automatic-rollback, health-assessment, incident-notification]
+    if: always()
+    
+    steps:
+      - name: Generate incident response summary
+        run: |
+          echo "## 🎯 Incident Response Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### 📊 **Response Details:**" >> $GITHUB_STEP_SUMMARY
+          echo "- **Incident ID**: ${{ needs.incident-assessment.outputs.incident-id }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Type**: ${{ env.INCIDENT_TYPE }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Environment**: ${{ env.AFFECTED_ENV }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Severity**: ${{ env.SEVERITY }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Escalation Level**: ${{ needs.incident-assessment.outputs.escalation-level }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### 🔄 **Actions Taken:**" >> $GITHUB_STEP_SUMMARY
+          echo "- **Assessment**: ${{ needs.incident-assessment.result }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Automatic Rollback**: ${{ needs.automatic-rollback.result || 'skipped' }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Health Assessment**: ${{ needs.health-assessment.result }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Notification**: ${{ needs.incident-notification.result }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### 📈 **Current Status:**" >> $GITHUB_STEP_SUMMARY
+          echo "- **System Health**: ${{ needs.health-assessment.outputs.overall_health || 'Unknown' }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Issues Found**: ${{ needs.health-assessment.outputs.issues_found || '0' }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Response Time**: $(date -u)" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          CURRENT_HEALTH="${{ needs.health-assessment.outputs.overall_health || 'UNKNOWN' }}"
+          
+          if [ "$CURRENT_HEALTH" = "HEALTHY" ]; then
+            echo "## ✅ **Incident Response: SUCCESS**" >> $GITHUB_STEP_SUMMARY
+            echo "System has recovered. Consider resolving the incident after validation." >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "### 📝 **Next Steps:**" >> $GITHUB_STEP_SUMMARY
+            echo "1. Monitor system for 30-60 minutes" >> $GITHUB_STEP_SUMMARY
+            echo "2. Validate full functionality" >> $GITHUB_STEP_SUMMARY
+            echo "3. Update stakeholders on resolution" >> $GITHUB_STEP_SUMMARY
+            echo "4. Schedule post-incident review" >> $GITHUB_STEP_SUMMARY
+            echo "5. Document lessons learned" >> $GITHUB_STEP_SUMMARY
+          elif [ "$CURRENT_HEALTH" = "DEGRADED" ]; then
+            echo "## 🟡 **Incident Response: PARTIAL**" >> $GITHUB_STEP_SUMMARY
+            echo "System is functional but degraded. Continued monitoring required." >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "### ⚡ **Immediate Actions:**" >> $GITHUB_STEP_SUMMARY
+            echo "1. Continue investigation and remediation" >> $GITHUB_STEP_SUMMARY
+            echo "2. Consider additional rollback actions" >> $GITHUB_STEP_SUMMARY
+            echo "3. Monitor key metrics closely" >> $GITHUB_STEP_SUMMARY
+            echo "4. Prepare manual intervention if needed" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "## 🔴 **Incident Response: NEEDS ESCALATION**" >> $GITHUB_STEP_SUMMARY
+            echo "System is still experiencing critical issues. Manual intervention required." >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "### 🚨 **URGENT Actions:**" >> $GITHUB_STEP_SUMMARY
+            echo "1. **ESCALATE** to next support level immediately" >> $GITHUB_STEP_SUMMARY
+            echo "2. **MANUAL REVIEW** of all system components" >> $GITHUB_STEP_SUMMARY
+            echo "3. **CONSIDER** emergency maintenance window" >> $GITHUB_STEP_SUMMARY
+            echo "4. **NOTIFY** all stakeholders of extended outage" >> $GITHUB_STEP_SUMMARY
+            echo "5. **ACTIVATE** disaster recovery procedures if applicable" >> $GITHUB_STEP_SUMMARY
+          fi
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Incident Tracking**: Check repository issues for detailed tracking and updates." >> $GITHUB_STEP_SUMMARY

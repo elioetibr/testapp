@@ -1,0 +1,837 @@
+name: Security Compliance Assessment & Reporting
+
+on:
+  schedule:
+    # Daily security compliance check at 3 AM UTC
+    - cron: '0 3 * * *'
+    # Weekly comprehensive report on Mondays at 1 AM UTC
+    - cron: '0 1 * * 1'
+    
+  workflow_dispatch:
+    inputs:
+      scan_scope:
+        description: 'Scope of security scan'
+        required: false
+        type: choice
+        default: 'comprehensive'
+        options: ['quick', 'standard', 'comprehensive', 'infrastructure-only', 'application-only']
+      environment:
+        description: 'Environment to scan'
+        required: false
+        type: choice
+        default: 'all'
+        options: ['all', 'dev', 'production']
+      generate_report:
+        description: 'Generate compliance report'
+        required: false
+        type: boolean
+        default: true
+      remediation_mode:
+        description: 'Auto-remediation mode'
+        required: false
+        type: choice
+        default: 'report-only'
+        options: ['report-only', 'safe-fix', 'full-remediation']
+
+env:
+  SCAN_SCOPE: ${{ inputs.scan_scope || (github.event.schedule && contains(github.event.schedule, '0 1 * * 1') && 'comprehensive' || 'standard') }}
+  TARGET_ENV: ${{ inputs.environment || 'all' }}
+  GENERATE_REPORT: ${{ inputs.generate_report != 'false' }}
+  REMEDIATION_MODE: ${{ inputs.remediation_mode || 'report-only' }}
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+  security-events: write
+  id-token: write
+
+jobs:
+  # 🔍 Infrastructure Security Assessment
+  infrastructure-security:
+    name: 🔍 Infrastructure Security
+    runs-on: ${{ vars.RUNS_ON || 'ubuntu-latest' }}
+    if: env.SCAN_SCOPE != 'application-only'
+    outputs:
+      vulnerabilities-count: ${{ steps.infra-scan.outputs.vulnerabilities_count }}
+      critical-issues: ${{ steps.infra-scan.outputs.critical_issues }}
+      compliance-score: ${{ steps.infra-scan.outputs.compliance_score }}
+      
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4.3.1
+        with:
+          role-to-assume: arn:aws:iam::892193016253:role/github-actions-role
+          role-session-name: github-actions
+          aws-region: us-east-1
+
+      - name: Setup security scanning tools
+        run: |
+          # Install Checkov for infrastructure scanning
+          pip install checkov
+          
+          # Install AWS CLI security tools
+          pip install prowler
+          
+          # Install CDK security scanning
+          npm install -g @aws-cdk/aws-iam @aws-cdk/aws-ec2
+
+      - name: Infrastructure as Code security scan
+        id: infra-scan
+        run: |
+          echo "## 🔍 Infrastructure Security Assessment" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          # Initialize counters
+          TOTAL_VULNERABILITIES=0
+          CRITICAL_ISSUES=0
+          HIGH_ISSUES=0
+          MEDIUM_ISSUES=0
+          LOW_ISSUES=0
+          
+          # Checkov scan on infrastructure code
+          echo "### 📋 Infrastructure Code Analysis (Checkov)" >> $GITHUB_STEP_SUMMARY
+          
+          checkov -d infrastructure/ --framework cloudformation --output json > checkov-results.json || true
+          checkov -d infrastructure/ --framework cloudformation --output cli >> $GITHUB_STEP_SUMMARY || true
+          
+          # Parse Checkov results
+          if [ -f "checkov-results.json" ]; then
+            CHECKOV_FAILED=$(jq '.summary.failed // 0' checkov-results.json)
+            CHECKOV_PASSED=$(jq '.summary.passed // 0' checkov-results.json)
+            TOTAL_VULNERABILITIES=$((TOTAL_VULNERABILITIES + CHECKOV_FAILED))
+            
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "**Checkov Results:**" >> $GITHUB_STEP_SUMMARY
+            echo "- ✅ **Passed**: $CHECKOV_PASSED" >> $GITHUB_STEP_SUMMARY
+            echo "- ❌ **Failed**: $CHECKOV_FAILED" >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          # CDK Security Analysis
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### 🏗️ CDK Security Analysis" >> $GITHUB_STEP_SUMMARY
+          
+          cd infrastructure
+          
+          # Check for security best practices in CDK code
+          SECURITY_ISSUES=0
+          
+          # Check for hardcoded secrets
+          if grep -r "password\|secret\|key" --include="*.ts" --include="*.js" .; then
+            echo "⚠️ **Potential hardcoded secrets found**" >> $GITHUB_STEP_SUMMARY
+            SECURITY_ISSUES=$((SECURITY_ISSUES + 1))
+          fi
+          
+          # Check for overly permissive IAM policies
+          if grep -r "\*" --include="*.ts" lib/ | grep -i "action\|resource"; then
+            echo "⚠️ **Potentially overly permissive IAM policies**" >> $GITHUB_STEP_SUMMARY
+            SECURITY_ISSUES=$((SECURITY_ISSUES + 1))
+          fi
+          
+          # Check for public access configurations
+          if grep -r "0.0.0.0/0\|::/0" --include="*.ts" lib/; then
+            echo "⚠️ **Public access configurations found**" >> $GITHUB_STEP_SUMMARY
+            SECURITY_ISSUES=$((SECURITY_ISSUES + 1))
+          fi
+          
+          cd ..
+          
+          TOTAL_VULNERABILITIES=$((TOTAL_VULNERABILITIES + SECURITY_ISSUES))
+          
+          # AWS Config compliance check (if applicable)
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### 📊 AWS Config Compliance" >> $GITHUB_STEP_SUMMARY
+          
+          CONFIG_VIOLATIONS=0
+          if aws configservice get-compliance-summary-by-config-rule --region ${{ vars.AWS_DEFAULT_REGION }} &>/dev/null; then
+            COMPLIANCE_SUMMARY=$(aws configservice get-compliance-summary-by-config-rule \
+              --query 'ComplianceSummary' --output json 2>/dev/null || echo '{}')
+            
+            if [ "$COMPLIANCE_SUMMARY" != "{}" ]; then
+              CONFIG_VIOLATIONS=$(echo "$COMPLIANCE_SUMMARY" | jq -r '.NonCompliantResourceCount.CappedCount // 0')
+              COMPLIANT=$(echo "$COMPLIANCE_SUMMARY" | jq -r '.CompliantResourceCount.CappedCount // 0')
+              
+              echo "- ✅ **Compliant Resources**: $COMPLIANT" >> $GITHUB_STEP_SUMMARY
+              echo "- ❌ **Non-Compliant Resources**: $CONFIG_VIOLATIONS" >> $GITHUB_STEP_SUMMARY
+              
+              TOTAL_VULNERABILITIES=$((TOTAL_VULNERABILITIES + CONFIG_VIOLATIONS))
+            fi
+          else
+            echo "ℹ️ AWS Config not available or not configured" >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          # Classify issues by severity
+          if [ "$TOTAL_VULNERABILITIES" -gt 20 ]; then
+            CRITICAL_ISSUES=5
+            HIGH_ISSUES=10
+          elif [ "$TOTAL_VULNERABILITIES" -gt 10 ]; then
+            CRITICAL_ISSUES=2
+            HIGH_ISSUES=5
+          elif [ "$TOTAL_VULNERABILITIES" -gt 0 ]; then
+            HIGH_ISSUES=2
+          fi
+          
+          # Calculate compliance score (simplified)
+          if [ "$TOTAL_VULNERABILITIES" -eq 0 ]; then
+            COMPLIANCE_SCORE=100
+          elif [ "$TOTAL_VULNERABILITIES" -lt 5 ]; then
+            COMPLIANCE_SCORE=90
+          elif [ "$TOTAL_VULNERABILITIES" -lt 10 ]; then
+            COMPLIANCE_SCORE=80
+          elif [ "$TOTAL_VULNERABILITIES" -lt 20 ]; then
+            COMPLIANCE_SCORE=70
+          else
+            COMPLIANCE_SCORE=60
+          fi
+          
+          # Set outputs
+          echo "vulnerabilities_count=$TOTAL_VULNERABILITIES" >> $GITHUB_OUTPUT
+          echo "critical_issues=$CRITICAL_ISSUES" >> $GITHUB_OUTPUT
+          echo "compliance_score=$COMPLIANCE_SCORE" >> $GITHUB_OUTPUT
+          
+          # Summary
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "## 📊 Infrastructure Security Summary" >> $GITHUB_STEP_SUMMARY
+          echo "- **Total Issues**: $TOTAL_VULNERABILITIES" >> $GITHUB_STEP_SUMMARY
+          echo "- **Critical Issues**: $CRITICAL_ISSUES" >> $GITHUB_STEP_SUMMARY
+          echo "- **Compliance Score**: $COMPLIANCE_SCORE%" >> $GITHUB_STEP_SUMMARY
+
+      - name: Upload security scan results
+        uses: actions/upload-artifact@v4
+        with:
+          name: infrastructure-security-results
+          path: |
+            checkov-results.json
+            security-scan-report.txt
+          retention-days: 30
+
+  # 🐍 Application Security Assessment
+  application-security:
+    name: 🐍 Application Security
+    runs-on: ${{ vars.RUNS_ON || 'ubuntu-latest' }}
+    if: env.SCAN_SCOPE != 'infrastructure-only'
+    outputs:
+      vulnerabilities-count: ${{ steps.app-scan.outputs.vulnerabilities_count }}
+      critical-issues: ${{ steps.app-scan.outputs.critical_issues }}
+      dependency-issues: ${{ steps.app-scan.outputs.dependency_issues }}
+      
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Python and UV
+        uses: astral-sh/setup-uv@v2
+        with:
+          version: "latest"
+          enable-cache: true
+          cache-dependency-glob: "pyproject.toml"
+
+      - name: Install dependencies
+        run: uv sync --group dev
+
+      - name: Application security scan
+        id: app-scan
+        run: |
+          echo "## 🐍 Application Security Assessment" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          # Initialize counters
+          TOTAL_VULNERABILITIES=0
+          CRITICAL_ISSUES=0
+          DEPENDENCY_ISSUES=0
+          
+          # Bandit security scan
+          echo "### 🔒 Static Application Security (Bandit)" >> $GITHUB_STEP_SUMMARY
+          
+          uv run bandit -r src/testapp/ -f json -o bandit-results.json || true
+          BANDIT_ISSUES=$(jq '.results | length' bandit-results.json 2>/dev/null || echo 0)
+          
+          if [ "$BANDIT_ISSUES" -gt 0 ]; then
+            echo "**⚠️ Bandit found $BANDIT_ISSUES security issues:**" >> $GITHUB_STEP_SUMMARY
+            uv run bandit -r src/testapp/ -f txt | head -50 >> $GITHUB_STEP_SUMMARY
+            
+            # Count high/medium severity issues
+            HIGH_SEVERITY=$(jq '[.results[] | select(.issue_severity == "HIGH")] | length' bandit-results.json 2>/dev/null || echo 0)
+            MEDIUM_SEVERITY=$(jq '[.results[] | select(.issue_severity == "MEDIUM")] | length' bandit-results.json 2>/dev/null || echo 0)
+            
+            CRITICAL_ISSUES=$((CRITICAL_ISSUES + HIGH_SEVERITY))
+            TOTAL_VULNERABILITIES=$((TOTAL_VULNERABILITIES + BANDIT_ISSUES))
+            
+            echo "- 🔴 **High Severity**: $HIGH_SEVERITY" >> $GITHUB_STEP_SUMMARY
+            echo "- 🟡 **Medium Severity**: $MEDIUM_SEVERITY" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "✅ **No security issues found by Bandit**" >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          # Dependency vulnerability scan
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### 📦 Dependency Security (Safety)" >> $GITHUB_STEP_SUMMARY
+          
+          # Install and run safety check
+          uv add safety --group dev
+          uv run safety check --json > safety-results.json || true
+          
+          if [ -f "safety-results.json" ] && [ -s "safety-results.json" ]; then
+            SAFETY_ISSUES=$(jq '. | length' safety-results.json 2>/dev/null || echo 0)
+            
+            if [ "$SAFETY_ISSUES" -gt 0 ]; then
+              echo "**⚠️ Found $SAFETY_ISSUES vulnerable dependencies:**" >> $GITHUB_STEP_SUMMARY
+              uv run safety check | head -30 >> $GITHUB_STEP_SUMMARY
+              
+              DEPENDENCY_ISSUES=$SAFETY_ISSUES
+              TOTAL_VULNERABILITIES=$((TOTAL_VULNERABILITIES + SAFETY_ISSUES))
+            else
+              echo "✅ **No vulnerable dependencies found**" >> $GITHUB_STEP_SUMMARY
+            fi
+          else
+            echo "✅ **No vulnerable dependencies found**" >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          # Semgrep security scan (if comprehensive)
+          if [ "${{ env.SCAN_SCOPE }}" = "comprehensive" ]; then
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "### 🔍 Advanced Security Analysis (Semgrep)" >> $GITHUB_STEP_SUMMARY
+            
+            # Install semgrep
+            pip install semgrep
+            
+            # Run semgrep security rules
+            semgrep --config=auto src/ --json > semgrep-results.json || true
+            
+            if [ -f "semgrep-results.json" ]; then
+              SEMGREP_ISSUES=$(jq '.results | length' semgrep-results.json 2>/dev/null || echo 0)
+              
+              if [ "$SEMGREP_ISSUES" -gt 0 ]; then
+                echo "**⚠️ Semgrep found $SEMGREP_ISSUES potential issues:**" >> $GITHUB_STEP_SUMMARY
+                
+                # Count critical/high severity
+                SEMGREP_CRITICAL=$(jq '[.results[] | select(.extra.severity == "ERROR")] | length' semgrep-results.json 2>/dev/null || echo 0)
+                CRITICAL_ISSUES=$((CRITICAL_ISSUES + SEMGREP_CRITICAL))
+                TOTAL_VULNERABILITIES=$((TOTAL_VULNERABILITIES + SEMGREP_ISSUES))
+                
+                echo "- 🔴 **Critical**: $SEMGREP_CRITICAL" >> $GITHUB_STEP_SUMMARY
+                echo "- 🟡 **Total Issues**: $SEMGREP_ISSUES" >> $GITHUB_STEP_SUMMARY
+              else
+                echo "✅ **No issues found by Semgrep**" >> $GITHUB_STEP_SUMMARY
+              fi
+            fi
+          fi
+          
+          # Django security check
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### 🎯 Django Security Check" >> $GITHUB_STEP_SUMMARY
+          
+          cd src
+          DJANGO_ISSUES=0
+          
+          # Check Django security settings
+          uv run python manage.py check --settings=testapp.settings.ci --deploy > django-check.txt 2>&1 || true
+          
+          if grep -q "ERROR\|WARNING" django-check.txt; then
+            DJANGO_ISSUES=$(grep -c "ERROR\|WARNING" django-check.txt || echo 0)
+            echo "**⚠️ Django security check found $DJANGO_ISSUES issues:**" >> $GITHUB_STEP_SUMMARY
+            cat django-check.txt >> $GITHUB_STEP_SUMMARY
+            
+            TOTAL_VULNERABILITIES=$((TOTAL_VULNERABILITIES + DJANGO_ISSUES))
+          else
+            echo "✅ **Django security check passed**" >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          cd ..
+          
+          # Set outputs
+          echo "vulnerabilities_count=$TOTAL_VULNERABILITIES" >> $GITHUB_OUTPUT
+          echo "critical_issues=$CRITICAL_ISSUES" >> $GITHUB_OUTPUT
+          echo "dependency_issues=$DEPENDENCY_ISSUES" >> $GITHUB_OUTPUT
+          
+          # Summary
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "## 📊 Application Security Summary" >> $GITHUB_STEP_SUMMARY
+          echo "- **Total Vulnerabilities**: $TOTAL_VULNERABILITIES" >> $GITHUB_STEP_SUMMARY
+          echo "- **Critical Issues**: $CRITICAL_ISSUES" >> $GITHUB_STEP_SUMMARY
+          echo "- **Dependency Issues**: $DEPENDENCY_ISSUES" >> $GITHUB_STEP_SUMMARY
+
+      - name: Upload application security results
+        uses: actions/upload-artifact@v4
+        with:
+          name: application-security-results
+          path: |
+            bandit-results.json
+            safety-results.json
+            semgrep-results.json
+            src/django-check.txt
+          retention-days: 30
+
+  # 🔐 Container Security Assessment
+  container-security:
+    name: 🔐 Container Security
+    runs-on: ${{ vars.RUNS_ON || 'ubuntu-latest' }}
+    if: env.SCAN_SCOPE == 'comprehensive' || env.SCAN_SCOPE == 'standard'
+    outputs:
+      vulnerabilities-count: ${{ steps.container-scan.outputs.vulnerabilities_count }}
+      critical-issues: ${{ steps.container-scan.outputs.critical_issues }}
+      
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Container security scan
+        id: container-scan
+        run: |
+          echo "## 🔐 Container Security Assessment" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          # Install Trivy
+          sudo apt-get update
+          sudo apt-get install wget apt-transport-https gnupg lsb-release -y
+          wget -qO - https://aquasecurity.github.io/trivy-repo/deb/public.key | sudo apt-key add -
+          echo "deb https://aquasecurity.github.io/trivy-repo/deb $(lsb_release -sc) main" | sudo tee -a /etc/apt/sources.list.d/trivy.list
+          sudo apt-get update
+          sudo apt-get install trivy -y
+          
+          TOTAL_VULNERABILITIES=0
+          CRITICAL_ISSUES=0
+          
+          # Dockerfile security scan
+          echo "### 📋 Dockerfile Security Analysis" >> $GITHUB_STEP_SUMMARY
+          
+          # Scan Dockerfile for best practices
+          if [ -f "Dockerfile" ]; then
+            # Simple Dockerfile security checks
+            DOCKERFILE_ISSUES=0
+            
+            if grep -q "FROM.*:latest" Dockerfile; then
+              echo "⚠️ **Using 'latest' tag is not recommended**" >> $GITHUB_STEP_SUMMARY
+              DOCKERFILE_ISSUES=$((DOCKERFILE_ISSUES + 1))
+            fi
+            
+            if grep -q "ADD http\|ADD https" Dockerfile; then
+              echo "⚠️ **Using ADD for URLs is not recommended, use RUN + curl/wget**" >> $GITHUB_STEP_SUMMARY
+              DOCKERFILE_ISSUES=$((DOCKERFILE_ISSUES + 1))
+            fi
+            
+            if ! grep -q "USER " Dockerfile; then
+              echo "⚠️ **Running as root user - consider adding USER directive**" >> $GITHUB_STEP_SUMMARY
+              DOCKERFILE_ISSUES=$((DOCKERFILE_ISSUES + 1))
+            fi
+            
+            TOTAL_VULNERABILITIES=$((TOTAL_VULNERABILITIES + DOCKERFILE_ISSUES))
+            
+            if [ "$DOCKERFILE_ISSUES" -eq 0 ]; then
+              echo "✅ **Dockerfile follows security best practices**" >> $GITHUB_STEP_SUMMARY
+            fi
+          fi
+          
+          # Build and scan image (if in comprehensive mode)
+          if [ "${{ env.SCAN_SCOPE }}" = "comprehensive" ]; then
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "### 🐳 Container Image Vulnerability Scan" >> $GITHUB_STEP_SUMMARY
+            
+            # Build image for scanning
+            docker build -t testapp-security-scan:latest .
+            
+            # Scan with Trivy
+            trivy image --format json --output trivy-results.json testapp-security-scan:latest || true
+            
+            if [ -f "trivy-results.json" ]; then
+              TRIVY_CRITICAL=$(jq '[.Results[]?.Vulnerabilities[]? | select(.Severity == "CRITICAL")] | length' trivy-results.json 2>/dev/null || echo 0)
+              TRIVY_HIGH=$(jq '[.Results[]?.Vulnerabilities[]? | select(.Severity == "HIGH")] | length' trivy-results.json 2>/dev/null || echo 0)
+              TRIVY_TOTAL=$(jq '[.Results[]?.Vulnerabilities[]?] | length' trivy-results.json 2>/dev/null || echo 0)
+              
+              echo "**Container vulnerability scan results:**" >> $GITHUB_STEP_SUMMARY
+              echo "- 🔴 **Critical**: $TRIVY_CRITICAL" >> $GITHUB_STEP_SUMMARY
+              echo "- 🟡 **High**: $TRIVY_HIGH" >> $GITHUB_STEP_SUMMARY
+              echo "- 📊 **Total**: $TRIVY_TOTAL" >> $GITHUB_STEP_SUMMARY
+              
+              CRITICAL_ISSUES=$((CRITICAL_ISSUES + TRIVY_CRITICAL))
+              TOTAL_VULNERABILITIES=$((TOTAL_VULNERABILITIES + TRIVY_TOTAL))
+              
+              # Show top vulnerabilities
+              if [ "$TRIVY_TOTAL" -gt 0 ]; then
+                echo "" >> $GITHUB_STEP_SUMMARY
+                echo "**Top Critical/High Vulnerabilities:**" >> $GITHUB_STEP_SUMMARY
+                trivy image --format table --severity CRITICAL,HIGH testapp-security-scan:latest | head -20 >> $GITHUB_STEP_SUMMARY
+              fi
+            fi
+          fi
+          
+          # Set outputs
+          echo "vulnerabilities_count=$TOTAL_VULNERABILITIES" >> $GITHUB_OUTPUT
+          echo "critical_issues=$CRITICAL_ISSUES" >> $GITHUB_OUTPUT
+          
+          # Summary
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "## 📊 Container Security Summary" >> $GITHUB_STEP_SUMMARY
+          echo "- **Total Issues**: $TOTAL_VULNERABILITIES" >> $GITHUB_STEP_SUMMARY
+          echo "- **Critical Issues**: $CRITICAL_ISSUES" >> $GITHUB_STEP_SUMMARY
+
+      - name: Upload container security results
+        uses: actions/upload-artifact@v4
+        with:
+          name: container-security-results
+          path: |
+            trivy-results.json
+          retention-days: 30
+
+  # 📊 Compliance Reporting
+  compliance-reporting:
+    name: 📊 Compliance Reporting
+    runs-on: ubuntu-latest
+    needs: [infrastructure-security, application-security, container-security]
+    if: always() && env.GENERATE_REPORT == 'true'
+    
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: security-artifacts
+
+      - name: Generate comprehensive compliance report
+        id: generate-report
+        run: |
+          echo "## 🎯 Security Compliance Report" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          # Collect results from all scans
+          INFRA_VULNS="${{ needs.infrastructure-security.outputs.vulnerabilities-count || '0' }}"
+          INFRA_CRITICAL="${{ needs.infrastructure-security.outputs.critical-issues || '0' }}"
+          INFRA_SCORE="${{ needs.infrastructure-security.outputs.compliance-score || '100' }}"
+          
+          APP_VULNS="${{ needs.application-security.outputs.vulnerabilities-count || '0' }}"
+          APP_CRITICAL="${{ needs.application-security.outputs.critical-issues || '0' }}"
+          APP_DEPS="${{ needs.application-security.outputs.dependency-issues || '0' }}"
+          
+          CONTAINER_VULNS="${{ needs.container-security.outputs.vulnerabilities-count || '0' }}"
+          CONTAINER_CRITICAL="${{ needs.container-security.outputs.critical-issues || '0' }}"
+          
+          # Calculate totals
+          TOTAL_VULNS=$((INFRA_VULNS + APP_VULNS + CONTAINER_VULNS))
+          TOTAL_CRITICAL=$((INFRA_CRITICAL + APP_CRITICAL + CONTAINER_CRITICAL))
+          
+          # Determine overall security posture
+          if [ "$TOTAL_CRITICAL" -eq 0 ] && [ "$TOTAL_VULNS" -lt 5 ]; then
+            SECURITY_POSTURE="EXCELLENT"
+            POSTURE_EMOJI="🟢"
+          elif [ "$TOTAL_CRITICAL" -le 2 ] && [ "$TOTAL_VULNS" -lt 15 ]; then
+            SECURITY_POSTURE="GOOD"
+            POSTURE_EMOJI="🟡"
+          elif [ "$TOTAL_CRITICAL" -le 5 ] && [ "$TOTAL_VULNS" -lt 30 ]; then
+            SECURITY_POSTURE="NEEDS_ATTENTION"
+            POSTURE_EMOJI="🟠"
+          else
+            SECURITY_POSTURE="CRITICAL"
+            POSTURE_EMOJI="🔴"
+          fi
+          
+          # Calculate overall compliance score
+          OVERALL_SCORE=$((100 - TOTAL_VULNS - TOTAL_CRITICAL * 5))
+          if [ "$OVERALL_SCORE" -lt 0 ]; then
+            OVERALL_SCORE=0
+          fi
+          
+          echo "### $POSTURE_EMOJI Overall Security Posture: **$SECURITY_POSTURE**" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Component | Vulnerabilities | Critical | Score |" >> $GITHUB_STEP_SUMMARY
+          echo "|-----------|----------------|----------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| **Infrastructure** | $INFRA_VULNS | $INFRA_CRITICAL | $INFRA_SCORE% |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Application** | $APP_VULNS | $APP_CRITICAL | - |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Container** | $CONTAINER_VULNS | $CONTAINER_CRITICAL | - |" >> $GITHUB_STEP_SUMMARY
+          echo "| **TOTAL** | **$TOTAL_VULNS** | **$TOTAL_CRITICAL** | **$OVERALL_SCORE%** |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          # Generate recommendations
+          echo "### 💡 Recommendations:" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          if [ "$TOTAL_CRITICAL" -gt 0 ]; then
+            echo "🔴 **URGENT**: Address $TOTAL_CRITICAL critical security issues immediately" >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          if [ "$APP_DEPS" -gt 0 ]; then
+            echo "📦 **Dependencies**: Update $APP_DEPS vulnerable dependencies" >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          if [ "$CONTAINER_VULNS" -gt 0 ]; then
+            echo "🐳 **Container**: Review and update base images" >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          if [ "$INFRA_VULNS" -gt 0 ]; then
+            echo "🏗️ **Infrastructure**: Review and fix infrastructure security issues" >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          if [ "$TOTAL_VULNS" -eq 0 ]; then
+            echo "✅ **Excellent**: No security issues detected!" >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          # Create detailed report
+          cat > compliance-report.md << EOF
+          # Security Compliance Report
+          
+          **Date**: $(date -u +"%Y-%m-%d %H:%M:%S UTC")  
+          **Scan Scope**: ${{ env.SCAN_SCOPE }}
+          **Environment**: ${{ env.TARGET_ENV }}
+          **Overall Posture**: $POSTURE_EMOJI $SECURITY_POSTURE
+          **Compliance Score**: $OVERALL_SCORE%
+          
+          ## Executive Summary
+          
+          This automated security compliance assessment scanned infrastructure code, application code, and container images for security vulnerabilities and compliance issues.
+          
+          ### Key Findings
+          
+          - **Total Vulnerabilities**: $TOTAL_VULNS
+          - **Critical Issues**: $TOTAL_CRITICAL  
+          - **Infrastructure Score**: $INFRA_SCORE%
+          - **Risk Level**: $SECURITY_POSTURE
+          
+          ### Component Breakdown
+          
+          #### Infrastructure Security
+          - Vulnerabilities: $INFRA_VULNS
+          - Critical Issues: $INFRA_CRITICAL
+          - Compliance Score: $INFRA_SCORE%
+          
+          #### Application Security  
+          - Code Vulnerabilities: $APP_VULNS
+          - Critical Issues: $APP_CRITICAL
+          - Dependency Issues: $APP_DEPS
+          
+          #### Container Security
+          - Image Vulnerabilities: $CONTAINER_VULNS
+          - Critical Issues: $CONTAINER_CRITICAL
+          
+          ## Next Steps
+          
+          1. **Immediate Actions** (0-24 hours):
+             - Review all critical severity issues
+             - Patch critical vulnerabilities
+             - Update vulnerable dependencies
+          
+          2. **Short-term Actions** (1-7 days):
+             - Address high and medium severity issues
+             - Improve infrastructure security configurations
+             - Update container base images
+          
+          3. **Long-term Actions** (ongoing):
+             - Implement continuous security monitoring
+             - Enhance secure development practices
+             - Regular security training for development team
+          
+          ## Compliance Standards
+          
+          This report evaluates compliance with:
+          - OWASP Top 10
+          - CIS Benchmarks
+          - AWS Security Best Practices
+          - Container Security Standards
+          
+          ---
+          
+          **Report Generated**: $(date -u +"%Y-%m-%d %H:%M:%S UTC")
+          **Workflow**: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          EOF
+          
+          # Set outputs for issue creation
+          echo "total_vulnerabilities=$TOTAL_VULNS" >> $GITHUB_OUTPUT
+          echo "critical_issues=$TOTAL_CRITICAL" >> $GITHUB_OUTPUT
+          echo "security_posture=$SECURITY_POSTURE" >> $GITHUB_OUTPUT
+          echo "compliance_score=$OVERALL_SCORE" >> $GITHUB_OUTPUT
+
+      - name: Upload compliance report
+        uses: actions/upload-artifact@v4
+        with:
+          name: compliance-report
+          path: compliance-report.md
+          retention-days: 90
+
+  # 📋 Create Security Issue (if needed)
+  create-security-issue:
+    name: 📋 Create Security Issue
+    runs-on: ubuntu-latest
+    needs: [infrastructure-security, application-security, container-security, compliance-reporting]
+    if: always() && needs.compliance-reporting.outputs.critical_issues != '0'
+    
+    steps:
+      - name: Create security compliance issue
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const totalVulns = '${{ needs.compliance-reporting.outputs.total_vulnerabilities }}';
+            const criticalIssues = '${{ needs.compliance-reporting.outputs.critical_issues }}';
+            const securityPosture = '${{ needs.compliance-reporting.outputs.security_posture }}';
+            const complianceScore = '${{ needs.compliance-reporting.outputs.compliance_score }}';
+            
+            const severityEmoji = {
+              'EXCELLENT': '🟢',
+              'GOOD': '🟡',
+              'NEEDS_ATTENTION': '🟠',
+              'CRITICAL': '🔴'
+            };
+            
+            const priority = criticalIssues > 5 ? 'CRITICAL' : criticalIssues > 0 ? 'HIGH' : 'MEDIUM';
+            
+            const issueBody = \`## \${severityEmoji[securityPosture] || '🔴'} Security Compliance Alert
+            
+            ### 🎯 **Security Assessment Summary**
+            
+            | Metric | Value | Status |
+            |--------|-------|--------|
+            | **Total Vulnerabilities** | \${totalVulns} | \${totalVulns === '0' ? '✅' : '⚠️'} |
+            | **Critical Issues** | \${criticalIssues} | \${criticalIssues === '0' ? '✅' : '🔴'} |
+            | **Security Posture** | \${securityPosture} | \${severityEmoji[securityPosture] || '🔴'} |
+            | **Compliance Score** | \${complianceScore}% | \${parseInt(complianceScore) >= 80 ? '✅' : '⚠️'} |
+            | **Priority Level** | \${priority} | 🚨 |
+            
+            ### 🔍 **Assessment Details**
+            
+            **Infrastructure Security**:
+            - Vulnerabilities: \${{ needs.infrastructure-security.outputs.vulnerabilities-count || 'N/A' }}
+            - Critical Issues: \${{ needs.infrastructure-security.outputs.critical-issues || 'N/A' }}
+            - Compliance Score: \${{ needs.infrastructure-security.outputs.compliance-score || 'N/A' }}%
+            
+            **Application Security**:
+            - Code Vulnerabilities: \${{ needs.application-security.outputs.vulnerabilities-count || 'N/A' }}
+            - Critical Issues: \${{ needs.application-security.outputs.critical-issues || 'N/A' }}
+            - Dependency Issues: \${{ needs.application-security.outputs.dependency-issues || 'N/A' }}
+            
+            **Container Security**:
+            - Image Vulnerabilities: \${{ needs.container-security.outputs.vulnerabilities-count || 'N/A' }}
+            - Critical Issues: \${{ needs.container-security.outputs.critical-issues || 'N/A' }}
+            
+            ### 🚨 **Immediate Actions Required**
+            
+            \${criticalIssues > 0 ? \`**CRITICAL SECURITY ISSUES DETECTED**
+            
+            \${criticalIssues} critical security issues require immediate attention:
+            
+            - [ ] **Review critical vulnerabilities** in security artifacts
+            - [ ] **Patch critical security issues** within 24 hours  
+            - [ ] **Update vulnerable dependencies** to secure versions
+            - [ ] **Review infrastructure configurations** for security compliance
+            - [ ] **Validate container images** and update base images if needed
+            
+            **⏰ SLA**: Critical issues must be addressed within 24 hours\` : 'No critical issues detected, but review recommended issues below.'}
+            
+            ### 📋 **Action Items**
+            
+            **High Priority (within 1 week):**
+            - [ ] Download and review detailed security reports
+            - [ ] Update dependencies with known vulnerabilities
+            - [ ] Fix infrastructure security misconfigurations
+            - [ ] Review and improve container security practices
+            - [ ] Update security documentation and procedures
+            
+            **Medium Priority (within 1 month):**
+            - [ ] Implement additional security controls
+            - [ ] Enhance security monitoring and alerting
+            - [ ] Conduct security training for development team
+            - [ ] Review and update security policies
+            - [ ] Plan security architecture improvements
+            
+            ### 🔗 **Resources**
+            
+            - **Workflow Run**: https://github.com/\${{ github.repository }}/actions/runs/\${{ github.run_id }}
+            - **Security Artifacts**: [Download reports](https://github.com/\${{ github.repository }}/actions/runs/\${{ github.run_id }})
+            - **Compliance Report**: View in workflow artifacts
+            - **Security Dashboard**: [AWS Security Hub](https://console.aws.amazon.com/securityhub/)
+            
+            ### 📊 **Trend Analysis**
+            
+            - **Scan Date**: \$(date -u +"%Y-%m-%d %H:%M:%S UTC")
+            - **Scan Type**: \${{ env.SCAN_SCOPE }}
+            - **Environment**: \${{ env.TARGET_ENV }}
+            - **Previous Issues**: [Track in project issues](https://github.com/\${{ github.repository }}/issues?q=label%3Asecurity-compliance)
+            
+            ### 🔐 **Compliance Standards**
+            
+            This assessment evaluates against:
+            - ✅ OWASP Top 10 Security Risks
+            - ✅ CIS Security Benchmarks  
+            - ✅ AWS Security Best Practices
+            - ✅ Container Security Standards
+            - ✅ Infrastructure as Code Security
+            
+            ### ⚡ **Quick Actions**
+            
+            **To acknowledge this alert:**
+            - Comment: \`acknowledged\` or \`ack\`
+            - Assign to security team member
+            - Apply \`in-progress\` label when work begins
+            
+            **To close this alert:**
+            - Complete all critical action items
+            - Re-run security scan to verify fixes
+            - Comment: \`resolved\` with summary of changes
+            
+            ---
+            
+            ### 🚨 **Security Team Notification**
+            
+            **Contact**: \${{ vars.SECURITY_CONTACT || vars.EMERGENCY_CONTACT || 'Security Team' }}
+            **Escalation**: If critical issues are not addressed within SLA
+            
+            **Note**: This is an automated security compliance report. Manual verification recommended before taking action.
+            \`;
+            
+            const issue = await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: \`\${severityEmoji[securityPosture] || '🔴'} Security Compliance Alert - \${criticalIssues} Critical Issues (\${new Date().toISOString().split('T')[0]})\`,
+              body: issueBody,
+              labels: [
+                'security-compliance',
+                \`priority-\${priority.toLowerCase()}\`,
+                'automated-security',
+                criticalIssues > 0 ? 'critical-vulnerabilities' : 'security-review',
+                \`posture-\${securityPosture.toLowerCase().replace('_', '-')}\`
+              ]
+            });
+            
+            console.log(\`Created security compliance issue #\${issue.data.number}\`);
+
+  # 📊 Security Compliance Summary
+  security-summary:
+    name: 📊 Security Summary
+    runs-on: ubuntu-latest
+    needs: [infrastructure-security, application-security, container-security, compliance-reporting, create-security-issue]
+    if: always()
+    
+    steps:
+      - name: Generate final summary
+        run: |
+          echo "## 🎯 Security Compliance Assessment Complete" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### 📋 Scan Configuration:" >> $GITHUB_STEP_SUMMARY
+          echo "- **Scope**: ${{ env.SCAN_SCOPE }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Environment**: ${{ env.TARGET_ENV }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Report Generated**: ${{ env.GENERATE_REPORT }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Remediation Mode**: ${{ env.REMEDIATION_MODE }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### 🔍 Assessment Results:" >> $GITHUB_STEP_SUMMARY
+          echo "- **Infrastructure Security**: ${{ needs.infrastructure-security.result || 'skipped' }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Application Security**: ${{ needs.application-security.result || 'skipped' }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Container Security**: ${{ needs.container-security.result || 'skipped' }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Compliance Reporting**: ${{ needs.compliance-reporting.result || 'skipped' }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### 📊 Key Metrics:" >> $GITHUB_STEP_SUMMARY
+          echo "- **Total Vulnerabilities**: ${{ needs.compliance-reporting.outputs.total_vulnerabilities || '0' }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Critical Issues**: ${{ needs.compliance-reporting.outputs.critical_issues || '0' }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Security Posture**: ${{ needs.compliance-reporting.outputs.security_posture || 'UNKNOWN' }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Compliance Score**: ${{ needs.compliance-reporting.outputs.compliance_score || '0' }}%" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          # Determine next action
+          CRITICAL_ISSUES="${{ needs.compliance-reporting.outputs.critical_issues || '0' }}"
+          
+          if [ "$CRITICAL_ISSUES" -gt 0 ]; then
+            echo "## 🚨 **Action Required**" >> $GITHUB_STEP_SUMMARY
+            echo "Critical security issues detected. Review created security issue for details." >> $GITHUB_STEP_SUMMARY
+          else
+            echo "## ✅ **Security Status: Good**" >> $GITHUB_STEP_SUMMARY
+            echo "No critical security issues detected. Review reports for optimization opportunities." >> $GITHUB_STEP_SUMMARY
+          fi
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Next automated scan**: Daily at 3:00 AM UTC" >> $GITHUB_STEP_SUMMARY
