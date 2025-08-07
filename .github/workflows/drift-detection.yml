@@ -46,7 +46,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        environment: ${{ fromJSON(format('[{0}]', env.ENVIRONMENTS)) }}
+        environment: ["dev", "production"]
     outputs:
       drift-detected: ${{ steps.drift-check.outputs.drift_detected }}
       drift-summary: ${{ steps.drift-check.outputs.drift_summary }}
@@ -214,11 +214,11 @@ jobs:
   compliance-check:
     name: 📊 Compliance Check (${{ matrix.environment }})
     runs-on: ubuntu-latest
-    if: env.CHECK_TYPE != 'quick'
+    if: (inputs.check_type || (github.event.schedule && contains(github.event.schedule, '0 2 * * 0') && 'comprehensive' || 'standard')) != 'quick'
     strategy:
       fail-fast: false
       matrix:
-        environment: ${{ fromJSON(format('[{0}]', env.ENVIRONMENTS)) }}
+        environment: ["dev", "production"]
     outputs:
       compliance-violations: ${{ steps.compliance.outputs.violations }}
       

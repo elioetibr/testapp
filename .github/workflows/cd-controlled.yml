@@ -130,9 +130,9 @@ jobs:
     runs-on: ubuntu-latest
     needs: pre-deployment-validation
     if: |
-      env.ENVIRONMENT == 'production' && 
+      (github.event.inputs.environment || github.event.client_payload.environment || 'dev') == 'production' && 
       needs.pre-deployment-validation.outputs.validation-passed == 'true' &&
-      env.DRY_RUN != 'true'
+      (github.event.inputs.dry_run || github.event.client_payload.dry_run || 'false') != 'true'
     environment:
       name: production-approval
       
@@ -228,10 +228,10 @@ jobs:
     if: |
       always() && 
       needs.pre-deployment-validation.outputs.validation-passed == 'true' &&
-      (env.DEPLOYMENT_TYPE == 'infrastructure-only' || env.DEPLOYMENT_TYPE == 'full') &&
-      (env.ENVIRONMENT != 'production' || needs.production-approval.result == 'success')
+      ((github.event.inputs.deployment_type || github.event.client_payload.deployment_type || 'full') == 'infrastructure-only' || (github.event.inputs.deployment_type || github.event.client_payload.deployment_type || 'full') == 'full') &&
+      ((github.event.inputs.environment || github.event.client_payload.environment || 'dev') != 'production' || needs.production-approval.result == 'success')
     environment:
-      name: ${{ env.ENVIRONMENT }}
+      name: ${{ github.event.inputs.environment || github.event.client_payload.environment || 'dev' }}
       
     steps:
       - name: Checkout code
@@ -378,11 +378,11 @@ jobs:
     if: |
       always() && 
       needs.pre-deployment-validation.outputs.validation-passed == 'true' &&
-      (env.DEPLOYMENT_TYPE == 'application-only' || env.DEPLOYMENT_TYPE == 'full') &&
-      (env.ENVIRONMENT != 'production' || needs.production-approval.result == 'success') &&
-      (env.DEPLOYMENT_TYPE == 'application-only' || needs.deploy-infrastructure.result == 'success')
+      ((github.event.inputs.deployment_type || github.event.client_payload.deployment_type || 'full') == 'application-only' || (github.event.inputs.deployment_type || github.event.client_payload.deployment_type || 'full') == 'full') &&
+      ((github.event.inputs.environment || github.event.client_payload.environment || 'dev') != 'production' || needs.production-approval.result == 'success') &&
+      ((github.event.inputs.deployment_type || github.event.client_payload.deployment_type || 'full') == 'application-only' || needs.deploy-infrastructure.result == 'success')
     environment:
-      name: ${{ env.ENVIRONMENT }}
+      name: ${{ github.event.inputs.environment || github.event.client_payload.environment || 'dev' }}
       
     steps:
       - name: Checkout code

@@ -123,7 +123,7 @@ jobs:
     if: |
       needs.destruction-validation.outputs.validation-passed == 'true' &&
       needs.destruction-validation.outputs.is-production == 'true' &&
-      env.DRY_RUN != 'true'
+      github.event.inputs.dry_run != 'true'
     environment:
       name: production-destruction-approval
       
@@ -208,7 +208,7 @@ jobs:
     if: |
       always() &&
       needs.destruction-validation.outputs.validation-passed == 'true' &&
-      env.ENVIRONMENT != 'all-pr-environments' &&
+      github.event.inputs.environment != 'all-pr-environments' &&
       (needs.destruction-validation.outputs.is-production != 'true' || needs.production-destruction-approval.result == 'success')
       
     steps:
@@ -314,7 +314,7 @@ jobs:
     needs: destruction-validation
     if: |
       needs.destruction-validation.outputs.validation-passed == 'true' &&
-      env.ENVIRONMENT == 'all-pr-environments'
+      github.event.inputs.environment == 'all-pr-environments'
       
     steps:
       - name: Checkout code
