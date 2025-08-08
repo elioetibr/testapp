@@ -411,7 +411,7 @@ jobs:
             aws ecs wait services-stable \
               --cluster testapp-cluster-${{ env.AFFECTED_ENV }} \
               --services testapp-service-${{ env.AFFECTED_ENV }} \
-              --cli-read-timeout 300 \
+              --cli-read-timeout 1500 \
               --cli-connect-timeout 60
             
             echo "✅ Application rollback completed" >> $GITHUB_STEP_SUMMARY

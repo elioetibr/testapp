@@ -900,16 +900,17 @@ jobs:
 
       - name: Deploy infrastructure
         id: deploy
+        timeout-minutes: 30
         run: |
           cd infrastructure
           
           # Acknowledge CDK notices
           npx cdk acknowledge 34892 34635 || true
           
-          # Deploy development stacks in dependency order
-          npx cdk deploy TestApp-VPC-dev --require-approval never --context environment=dev
-          npx cdk deploy TestApp-Platform-dev --require-approval never --context environment=dev
-          npx cdk deploy TestApp-App-dev --require-approval never --context environment=dev --outputs-file outputs.json
+          # Deploy development stacks in dependency order with timeout configuration
+          npx cdk deploy TestApp-VPC-dev --require-approval never --context environment=dev --cli-read-timeout 1500
+          npx cdk deploy TestApp-Platform-dev --require-approval never --context environment=dev --cli-read-timeout 1500
+          npx cdk deploy TestApp-App-dev --require-approval never --context environment=dev --outputs-file outputs.json --cli-read-timeout 1500
           
           # Extract application URL from outputs
           APPLICATION_URL=$(jq -r '.["TestApp-App-dev"]["ApplicationUrl"] // empty' outputs.json)
@@ -1165,16 +1166,17 @@ jobs:
 
       - name: Deploy production infrastructure
         id: deploy-prod
+        timeout-minutes: 30
         run: |
           cd infrastructure
           
           # Acknowledge CDK notices
           npx cdk acknowledge 34892 34635 || true
           
-          # Deploy production stacks in dependency order
-          npx cdk deploy TestApp-VPC-production --require-approval never --context environment=production
-          npx cdk deploy TestApp-Platform-production --require-approval never --context environment=production
-          npx cdk deploy TestApp-App-production --require-approval never --context environment=production --outputs-file outputs-prod.json
+          # Deploy production stacks in dependency order with timeout configuration
+          npx cdk deploy TestApp-VPC-production --require-approval never --context environment=production --cli-read-timeout 1500
+          npx cdk deploy TestApp-Platform-production --require-approval never --context environment=production --cli-read-timeout 1500
+          npx cdk deploy TestApp-App-production --require-approval never --context environment=production --outputs-file outputs-prod.json --cli-read-timeout 1500
           
           # Extract application URL from outputs
           APPLICATION_URL=$(jq -r '.["TestApp-production"]["ApplicationUrl"] // empty' outputs-prod.json)

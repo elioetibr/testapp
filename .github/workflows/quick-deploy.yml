@@ -182,7 +182,7 @@ jobs:
           aws ecs wait services-stable \
             --cluster $CLUSTER_NAME \
             --services ${{ env.SERVICE_NAME }} \
-            --cli-read-timeout 600
+            --cli-read-timeout 1500
           
           echo "✅ **Deployment Complete!**" >> $GITHUB_STEP_SUMMARY
 

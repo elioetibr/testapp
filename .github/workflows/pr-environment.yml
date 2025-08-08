@@ -87,14 +87,16 @@ jobs:
             --require-approval never \
             --context environment=pr \
             --context $PR_CONTEXT \
-            --outputs-file vpc-outputs.json
+            --outputs-file vpc-outputs.json \
+            --cli-read-timeout 1500
           
           echo "### 2. Deploying Platform Stack..." >> $GITHUB_STEP_SUMMARY
           npx cdk deploy TestApp-Platform-pr${{ env.PR_ID }} \
             --require-approval never \
             --context environment=pr \
             --context $PR_CONTEXT \
-            --outputs-file platform-outputs.json
+            --outputs-file platform-outputs.json \
+            --cli-read-timeout 1500
           
           echo "### 3. Deploying Application Stack..." >> $GITHUB_STEP_SUMMARY
           npx cdk deploy TestApp-App-pr${{ env.PR_ID }} \
@@ -102,6 +104,7 @@ jobs:
             --context environment=pr \
             --context $PR_CONTEXT \
             --context taskImageTag=pr-${{ github.event.number }} \
+            --cli-read-timeout 1500 \
             --outputs-file app-outputs.json
           
           # Extract application URL

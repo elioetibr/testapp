@@ -148,7 +148,7 @@ jobs:
 
       - name: Production Deployment Approval
         uses: trstringer/manual-approval@v1
-        timeout-minutes: 60
+        timeout-minutes: 30
         with:
           secret: ${{ steps.app-token.outputs.token }}
           approvers: ${{ vars.PRODUCTION_APPROVERS || github.repository_owner }}
@@ -330,17 +330,18 @@ jobs:
 
       - name: Deploy platform infrastructure stacks
         if: env.DRY_RUN != 'true'
+        timeout-minutes: 30
         run: |
           cd infrastructure
           
           echo "## 🏗️ Platform Infrastructure Deployment Progress" >> $GITHUB_STEP_SUMMARY
           
-          # Deploy platform stacks in dependency order
+          # Deploy platform stacks in dependency order with timeout configuration
           echo "### 1. Deploying VPC Stack..." >> $GITHUB_STEP_SUMMARY
-          npx cdk deploy TestApp-VPC-${{ env.ENVIRONMENT }} --require-approval never --context environment=${{ env.ENVIRONMENT }}
+          npx cdk deploy TestApp-VPC-${{ env.ENVIRONMENT }} --require-approval never --context environment=${{ env.ENVIRONMENT }} --cli-read-timeout 1500
           
           echo "### 2. Deploying ECS Platform Stack..." >> $GITHUB_STEP_SUMMARY
-          npx cdk deploy TestApp-Platform-${{ env.ENVIRONMENT }} --require-approval never --context environment=${{ env.ENVIRONMENT }}
+          npx cdk deploy TestApp-Platform-${{ env.ENVIRONMENT }} --require-approval never --context environment=${{ env.ENVIRONMENT }} --cli-read-timeout 1500
           
           echo "### ✅ Platform Infrastructure Deployment Complete" >> $GITHUB_STEP_SUMMARY
 
@@ -460,6 +461,7 @@ jobs:
 
       - name: Deploy application infrastructure stack
         if: env.DRY_RUN != 'true'
+        timeout-minutes: 30
         run: |
           cd infrastructure
           
@@ -470,7 +472,8 @@ jobs:
             --require-approval never \
             --context environment=${{ env.ENVIRONMENT }} \
             --context taskImageTag=${{ env.IMAGE_TAG }} \
-            --outputs-file outputs.json
+            --outputs-file outputs.json \
+            --cli-read-timeout 1500
           
           # Extract outputs for next jobs
           if [[ -f outputs.json ]]; then
