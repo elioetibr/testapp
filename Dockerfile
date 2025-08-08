@@ -20,12 +20,12 @@ FROM builder AS dependencies
 WORKDIR /app
 
 # Copy project files needed for installation
-COPY pyproject.toml .
+COPY pyproject.toml uv.lock ./
 
-# Create virtual environment and install dependencies
+# Create virtual environment and install production dependencies
 RUN uv venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
-RUN uv sync --group production --no-dev
+RUN uv sync --frozen --no-group dev
 
 # Create directories that will be needed in runtime (since distroless can't create them)
 RUN mkdir -p /app/logs /app/staticfiles

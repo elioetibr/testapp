@@ -321,14 +321,22 @@ CSP_IMG_SRC = ("'self'", "data:", "https:")
 CSP_FONT_SRC = ("'self'", "https:")
 
 # Email configuration
-email_config = env.email("EMAIL_URL")
-EMAIL_BACKEND = email_config["EMAIL_BACKEND"]
-EMAIL_HOST = email_config.get("EMAIL_HOST", "")
-EMAIL_PORT = email_config.get("EMAIL_PORT", 587)
-EMAIL_HOST_USER = email_config.get("EMAIL_HOST_USER", "")
-EMAIL_HOST_PASSWORD = email_config.get("EMAIL_HOST_PASSWORD", "")
-EMAIL_USE_TLS = email_config.get("EMAIL_USE_TLS", True)
-EMAIL_USE_SSL = email_config.get("EMAIL_USE_SSL", False)
+email_url = env("EMAIL_URL", default="smtp://localhost:25")
+if email_url == "console://":
+    EMAIL_BACKEND = "django.core.mail.backends.console.EmailBackend"
+    EMAIL_HOST = ""
+    EMAIL_PORT = 587
+    EMAIL_HOST_USER = ""
+    EMAIL_HOST_PASSWORD = ""
+else:
+    email_config = env.email("EMAIL_URL")
+    EMAIL_BACKEND = email_config["EMAIL_BACKEND"]
+    EMAIL_HOST = email_config.get("EMAIL_HOST", "")
+    EMAIL_PORT = email_config.get("EMAIL_PORT", 587)
+    EMAIL_HOST_USER = email_config.get("EMAIL_HOST_USER", "")
+    EMAIL_HOST_PASSWORD = email_config.get("EMAIL_HOST_PASSWORD", "")
+EMAIL_USE_TLS = email_config.get("EMAIL_USE_TLS", True) if email_url != "console://" else False
+EMAIL_USE_SSL = email_config.get("EMAIL_USE_SSL", False) if email_url != "console://" else False
 DEFAULT_FROM_EMAIL = env("DEFAULT_FROM_EMAIL")
 SERVER_EMAIL = DEFAULT_FROM_EMAIL
 
@@ -366,7 +374,7 @@ LOGGING = {
         },
         "file": {
             "class": "logging.handlers.RotatingFileHandler",
-            "filename": ROOT_DIR / "logs" / "django.log",
+            "filename": BASE_DIR / "logs" / "django.log",
             "maxBytes": 1024 * 1024 * 15,  # 15MB
             "backupCount": 10,
             "formatter": "verbose",

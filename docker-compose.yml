@@ -8,6 +8,7 @@ services:
     environment:
       - REQUIRED_SETTING=development
       - DEBUG=True
+      - EMAIL_URL=console://
     restart: unless-stopped
 networks:
   default:
