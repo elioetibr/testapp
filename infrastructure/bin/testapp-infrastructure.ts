@@ -158,6 +158,8 @@ const commonProps = {
     account: process.env.CDK_DEFAULT_ACCOUNT,
     region: process.env.CDK_DEFAULT_REGION || 'us-east-1',
   },
+  // Set stack timeout to 20 minutes for infrastructure operations
+  timeout: cdk.Duration.minutes(20),
 };
 
 if (prId) {

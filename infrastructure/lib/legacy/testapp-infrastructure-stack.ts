@@ -448,6 +448,14 @@ export class TestAppInfrastructureStack extends cdk.Stack {
       scaleOutCooldown: cdk.Duration.minutes(2),
     });
 
+    // Request-based auto scaling
+    scalableTarget.scaleOnRequestCount('RequestScaling', {
+      requestsPerTarget: 1000,
+      targetGroup: fargateService.targetGroup,
+      scaleInCooldown: cdk.Duration.minutes(5),
+      scaleOutCooldown: cdk.Duration.minutes(2),
+    });
+
     // Security group for the service
     fargateService.service.connections.securityGroups.forEach(sg => {
       sg.addIngressRule(

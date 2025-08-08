@@ -26,6 +26,7 @@ export interface ApplicationStackProps extends cdk.StackProps {
     maxCapacity?: number;
     cpuTargetUtilization?: number;
     memoryTargetUtilization?: number;
+    requestsPerTarget?: number;
     scaleInCooldownMinutes?: number;
     scaleOutCooldownMinutes?: number;
     healthCheckPath?: string;
@@ -65,6 +66,7 @@ export declare class ApplicationStack extends cdk.Stack {
     private createFargateService;
     private configureHealthCheck;
     private createAutoScaling;
+    private addRequestBasedScaling;
     private addListenerRules;
     private setupRoute53;
     private runMigrations;

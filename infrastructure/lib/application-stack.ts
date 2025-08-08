@@ -40,6 +40,7 @@ export interface ApplicationStackProps extends cdk.StackProps {
   maxCapacity?: number;
   cpuTargetUtilization?: number;
   memoryTargetUtilization?: number;
+  requestsPerTarget?: number;
   scaleInCooldownMinutes?: number;
   scaleOutCooldownMinutes?: number;
   // Health check configuration
@@ -178,11 +179,14 @@ export class ApplicationStack extends cdk.Stack {
     // Configure health checks
     this.configureHealthCheck(props);
 
-    // Create auto scaling
+    // Create auto scaling (CPU and Memory)
     this.scalableTarget = this.createAutoScaling(props);
 
     // Add listener rules
     this.addListenerRules(httpListener, httpsListener);
+
+    // Add request-based auto scaling after listener rules are created
+    this.addRequestBasedScaling(props);
 
     // Setup Route53 DNS records (if domain configured)
     this.setupRoute53(props);
@@ -480,12 +484,24 @@ export class ApplicationStack extends cdk.Stack {
       scaleOutCooldown: cdk.Duration.minutes(props.scaleOutCooldownMinutes || 2),
     });
 
-    // Note: Request-based auto scaling using scaleOnRequestCount requires the target group 
-    // to be attached to a load balancer first. Since we're creating listener rules after 
-    // the auto scaling setup, we'll skip request-based scaling for now.
-    // This can be added as a separate construct after the listener rules are created.
-
     return scalableTarget;
+  }
+
+  private addRequestBasedScaling(props: ApplicationStackProps): void {
+    if (!this.scalableTarget || !this.targetGroup) {
+      console.warn('⚠️  Cannot configure request-based scaling: scalableTarget or targetGroup not available');
+      return;
+    }
+
+    // Request-based auto scaling using ALB RequestCountPerTarget metric
+    this.scalableTarget.scaleOnRequestCount('RequestScaling', {
+      requestsPerTarget: props.requestsPerTarget || 1000,
+      targetGroup: this.targetGroup,
+      scaleInCooldown: cdk.Duration.minutes(props.scaleInCooldownMinutes || 5),
+      scaleOutCooldown: cdk.Duration.minutes(props.scaleOutCooldownMinutes || 2),
+    });
+
+    console.log(`✅ Request-based auto scaling configured: ${props.requestsPerTarget || 1000} requests per target`);
   }
 
   private addListenerRules(
