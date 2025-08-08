@@ -32,7 +32,7 @@ const environmentConfigs: Record<string, any> = {
     
     // ECS Platform Configuration
     clusterName: `testapp-cluster-${environment}`,
-    repositoryName: `testapp-${environment}`,
+    repositoryName: 'testapp',
     
     // Application Configuration
     serviceName: `testapp-service-${environment}`,
@@ -84,7 +84,7 @@ const environmentConfigs: Record<string, any> = {
     
     // ECS Platform Configuration
     clusterName: `testapp-cluster-${environment}`,
-    repositoryName: `testapp-${environment}`,
+    repositoryName: 'testapp',
     
     // Application Configuration
     serviceName: `testapp-service-${environment}`,

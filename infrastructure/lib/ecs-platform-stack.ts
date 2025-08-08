@@ -138,15 +138,17 @@ export class EcsPlatformStack extends cdk.Stack {
   }
 
   private createEcrRepository(props: EcsPlatformStackProps): ecr.Repository {
-    const repositoryName = props.repositoryName || `testapp-${props.environment}`;
+    const repositoryName = props.repositoryName || 'testapp';
     
-    const repository = new ecr.Repository(this, 'EcrRepository', {
-      repositoryName,
-      imageScanOnPush: true,
-      imageTagMutability: ecr.TagMutability.MUTABLE,
-      lifecycleRules: [
-        {
-          rulePriority: 1,
+    // Import existing ECR repository instead of creating a new one
+    const repository = ecr.Repository.fromRepositoryName(
+      this, 'EcrRepository',
+      repositoryName
+    );
+    
+    // Note: Lifecycle rules and other settings must be configured manually
+    // for imported repositories or through a separate stack
+    return repository;
           description: 'Delete untagged images after 1 day',
           tagStatus: ecr.TagStatus.UNTAGGED,
           maxImageAge: cdk.Duration.days(1),

@@ -4,19 +4,13 @@ import { execSync } from 'child_process';
 import * as yaml from 'js-yaml';
 
 export interface SecretsConfig {
-  application: {
-    secret_key: string;
-    jwt_secret: string;
-    required_setting: string;
-  };
-  external_services: {
-    api_key: string;
-    webhook_secret: string;
-  };
-  monitoring: {
-    datadog_api_key: string;
-    sentry_dsn: string;
-  };
+  secret_key: string;
+  jwt_secret: string;
+  required_setting: string;
+  api_key: string;
+  webhook_secret: string;
+  datadog_api_key: string;
+  sentry_dsn: string;
 }
 
 export class SecretsLoader {
@@ -82,19 +76,13 @@ export class SecretsLoader {
       
       // Fallback to environment variables
       return {
-        application: {
-          secret_key: process.env.APPLICATION_SECRET_KEY || 'default-secret',
-          jwt_secret: process.env.JWT_SECRET || 'default-jwt-secret',
-          required_setting: process.env.REQUIRED_SETTING || this.environment,
-        },
-        external_services: {
-          api_key: process.env.EXTERNAL_API_KEY || '',
-          webhook_secret: process.env.WEBHOOK_SECRET || '',
-        },
-        monitoring: {
-          datadog_api_key: process.env.DATADOG_API_KEY || '',
-          sentry_dsn: process.env.SENTRY_DSN || '',
-        },
+        secret_key: process.env.SECRET_KEY || 'default-secret',
+        jwt_secret: process.env.JWT_SECRET || 'default-jwt-secret',
+        required_setting: process.env.REQUIRED_SETTING || this.environment,
+        api_key: process.env.API_KEY || '',
+        webhook_secret: process.env.WEBHOOK_SECRET || '',
+        datadog_api_key: process.env.DATADOG_API_KEY || '',
+        sentry_dsn: process.env.SENTRY_DSN || '',
       };
     }
   }
@@ -147,8 +135,8 @@ export class SecretsLoader {
 
   private validateSecrets(secrets: any): void {
     const requiredPaths = [
-      'application.secret_key',
-      'application.required_setting'
+      'secret_key',
+      'required_setting'
     ];
 
     for (const path of requiredPaths) {
