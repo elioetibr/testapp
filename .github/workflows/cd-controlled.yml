@@ -220,9 +220,9 @@ jobs:
             
             For urgent deployments, contact: ${{ vars.EMERGENCY_CONTACT || 'On-call team' }}
 
-  # 🏗️ Infrastructure Deployment
-  deploy-development:
-    name: 🏗️ Deploy Infrastructure
+  # 🏗️ Platform Infrastructure Deployment (VPC + ECS)
+  deploy-platform-infrastructure:
+    name: 🏗️ Deploy Platform (VPC + ECS)
     runs-on: ${{ vars.RUNS_ON || 'ubuntu-latest' }}
     needs: [pre-deployment-validation, production-approval]
     if: |
@@ -328,22 +328,149 @@ jobs:
           
           echo "✅ All stacks are ready for deployment" >> $GITHUB_STEP_SUMMARY
 
-      - name: Deploy infrastructure stacks
+      - name: Deploy platform infrastructure stacks
         if: env.DRY_RUN != 'true'
         run: |
           cd infrastructure
           
-          echo "## 🏗️ Infrastructure Deployment Progress" >> $GITHUB_STEP_SUMMARY
+          echo "## 🏗️ Platform Infrastructure Deployment Progress" >> $GITHUB_STEP_SUMMARY
           
-          # Deploy in dependency order
+          # Deploy platform stacks in dependency order
           echo "### 1. Deploying VPC Stack..." >> $GITHUB_STEP_SUMMARY
           npx cdk deploy TestApp-VPC-${{ env.ENVIRONMENT }} --require-approval never --context environment=${{ env.ENVIRONMENT }}
           
-          echo "### 2. Deploying Platform Stack..." >> $GITHUB_STEP_SUMMARY
+          echo "### 2. Deploying ECS Platform Stack..." >> $GITHUB_STEP_SUMMARY
           npx cdk deploy TestApp-Platform-${{ env.ENVIRONMENT }} --require-approval never --context environment=${{ env.ENVIRONMENT }}
           
-          echo "### 3. Deploying Application Stack..." >> $GITHUB_STEP_SUMMARY
-          npx cdk deploy TestApp-App-${{ env.ENVIRONMENT }} --require-approval never --context environment=${{ env.ENVIRONMENT }} --outputs-file outputs.json
+          echo "### ✅ Platform Infrastructure Deployment Complete" >> $GITHUB_STEP_SUMMARY
+
+      - name: Platform infrastructure deployment summary
+        run: |
+          echo "## 🎯 Platform Infrastructure Deployment Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Parameter | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|-----------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Environment | ${{ env.ENVIRONMENT }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Deployment Type | Platform Infrastructure |" >> $GITHUB_STEP_SUMMARY
+          echo "| Dry Run | ${{ env.DRY_RUN }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| VPC Stack Status | ${{ env.DRY_RUN == 'true' && 'Simulated' || 'Deployed' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| ECS Platform Status | ${{ env.DRY_RUN == 'true' && 'Simulated' || 'Deployed' }} |" >> $GITHUB_STEP_SUMMARY
+
+  # 📦 Application Infrastructure Deployment
+  deploy-application-infrastructure:
+    name: 📦 Deploy Application Infrastructure
+    runs-on: ${{ vars.RUNS_ON || 'ubuntu-latest' }}
+    needs: [pre-deployment-validation, production-approval, deploy-platform-infrastructure]
+    if: |
+      always() && 
+      needs.pre-deployment-validation.outputs.validation-passed == 'true' &&
+      ((github.event.inputs.deployment_type || github.event.client_payload.deployment_type || 'full') == 'infrastructure-only' || (github.event.inputs.deployment_type || github.event.client_payload.deployment_type || 'full') == 'full') &&
+      ((github.event.inputs.environment || github.event.client_payload.environment || 'dev') != 'production' || needs.production-approval.result == 'success') &&
+      (needs.deploy-platform-infrastructure.result == 'success')
+    environment:
+      name: ${{ github.event.inputs.environment || github.event.client_payload.environment || 'dev' }}
+      
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4.3.1
+        with:
+          role-to-assume: arn:aws:iam::892193016253:role/github-actions-role
+          role-session-name: github-actions
+          aws-region: us-east-1
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: 'npm'
+          cache-dependency-path: infrastructure/package-lock.json
+
+      - name: Install infrastructure dependencies
+        run: |
+          cd infrastructure
+          npm ci --prefer-offline
+
+      - name: Build infrastructure
+        run: |
+          cd infrastructure
+          npm run build
+
+      - name: Acknowledge CDK notices
+        run: |
+          cd infrastructure
+          npx cdk acknowledge 34892 34635 || true
+
+      - name: Application infrastructure deployment (dry run)
+        if: env.DRY_RUN == 'true'
+        run: |
+          cd infrastructure
+          echo "## 🔍 Application Infrastructure Dry Run Results" >> $GITHUB_STEP_SUMMARY
+          echo "Performing CDK diff for application stack in ${{ env.ENVIRONMENT }} environment..." >> $GITHUB_STEP_SUMMARY
+          
+          # Show what would change for application stack
+          npx cdk diff TestApp-App-${{ env.ENVIRONMENT }} --context environment=${{ env.ENVIRONMENT }} --context taskImageTag=${{ env.IMAGE_TAG }} || true
+
+      - name: Wait for platform stacks to be ready
+        if: env.DRY_RUN != 'true'
+        timeout-minutes: 10
+        run: |
+          echo "## ⏳ Waiting for Platform Stacks" >> $GITHUB_STEP_SUMMARY
+          
+          # Wait for platform stacks to be completely ready
+          wait_for_stack() {
+            local stack_name=$1
+            local max_attempts=10
+            local attempt=1
+            
+            echo "Checking stack: $stack_name"
+            
+            while [ $attempt -le $max_attempts ]; do
+              status=$(aws cloudformation describe-stacks --stack-name $stack_name --query 'Stacks[0].StackStatus' --output text 2>/dev/null || echo "NOT_FOUND")
+              
+              case $status in
+                "CREATE_COMPLETE"|"UPDATE_COMPLETE")
+                  echo "✅ Stack $stack_name is ready (Status: $status)"
+                  return 0
+                  ;;
+                "CREATE_IN_PROGRESS"|"UPDATE_IN_PROGRESS")
+                  echo "⏳ Stack $stack_name is still deploying (Status: $status), waiting... (attempt $attempt/$max_attempts)"
+                  sleep 30
+                  ;;
+                *)
+                  echo "❌ Stack $stack_name has unexpected status: $status"
+                  return 1
+                  ;;
+              esac
+              
+              attempt=$((attempt + 1))
+            done
+            
+            echo "❌ Timeout waiting for stack $stack_name to be ready"
+            return 1
+          }
+          
+          # Wait for platform stacks
+          wait_for_stack "TestApp-VPC-${{ env.ENVIRONMENT }}"
+          wait_for_stack "TestApp-Platform-${{ env.ENVIRONMENT }}"
+          
+          echo "✅ Platform stacks are ready for application deployment" >> $GITHUB_STEP_SUMMARY
+
+      - name: Deploy application infrastructure stack
+        if: env.DRY_RUN != 'true'
+        run: |
+          cd infrastructure
+          
+          echo "## 📦 Application Infrastructure Deployment Progress" >> $GITHUB_STEP_SUMMARY
+          
+          echo "### Deploying Application Stack..." >> $GITHUB_STEP_SUMMARY
+          npx cdk deploy TestApp-App-${{ env.ENVIRONMENT }} \
+            --require-approval never \
+            --context environment=${{ env.ENVIRONMENT }} \
+            --context taskImageTag=${{ env.IMAGE_TAG }} \
+            --outputs-file outputs.json
           
           # Extract outputs for next jobs
           if [[ -f outputs.json ]]; then
@@ -353,18 +480,19 @@ jobs:
             fi
           fi
           
-          echo "### ✅ Infrastructure Deployment Complete" >> $GITHUB_STEP_SUMMARY
+          echo "### ✅ Application Infrastructure Deployment Complete" >> $GITHUB_STEP_SUMMARY
 
-      - name: Infrastructure deployment summary
+      - name: Application infrastructure deployment summary
         run: |
-          echo "## 🎯 Infrastructure Deployment Summary" >> $GITHUB_STEP_SUMMARY
+          echo "## 🎯 Application Infrastructure Deployment Summary" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "| Parameter | Value |" >> $GITHUB_STEP_SUMMARY
           echo "|-----------|-------|" >> $GITHUB_STEP_SUMMARY
           echo "| Environment | ${{ env.ENVIRONMENT }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| Deployment Type | ${{ env.DEPLOYMENT_TYPE }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Image Tag | ${{ env.IMAGE_TAG }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Deployment Type | Application Infrastructure |" >> $GITHUB_STEP_SUMMARY
           echo "| Dry Run | ${{ env.DRY_RUN }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| Stack Status | ${{ env.DRY_RUN == 'true' && 'Simulated' || 'Deployed' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Application Stack Status | ${{ env.DRY_RUN == 'true' && 'Simulated' || 'Deployed' }} |" >> $GITHUB_STEP_SUMMARY
           
           if [[ -n "$APPLICATION_URL" ]]; then
             echo "| Application URL | $APPLICATION_URL |" >> $GITHUB_STEP_SUMMARY
@@ -374,13 +502,13 @@ jobs:
   deploy-application:
     name: 🚀 Deploy Application
     runs-on: ${{ vars.RUNS_ON || 'ubuntu-latest' }}
-    needs: [pre-deployment-validation, production-approval, deploy-development]
+    needs: [pre-deployment-validation, production-approval, deploy-application-infrastructure]
     if: |
       always() && 
       needs.pre-deployment-validation.outputs.validation-passed == 'true' &&
       ((github.event.inputs.deployment_type || github.event.client_payload.deployment_type || 'full') == 'application-only' || (github.event.inputs.deployment_type || github.event.client_payload.deployment_type || 'full') == 'full') &&
       ((github.event.inputs.environment || github.event.client_payload.environment || 'dev') != 'production' || needs.production-approval.result == 'success') &&
-      ((github.event.inputs.deployment_type || github.event.client_payload.deployment_type || 'full') == 'application-only' || needs.deploy-development.result == 'success')
+      ((github.event.inputs.deployment_type || github.event.client_payload.deployment_type || 'full') == 'application-only' || needs.deploy-application-infrastructure.result == 'success')
     environment:
       name: ${{ github.event.inputs.environment || github.event.client_payload.environment || 'dev' }}
       
@@ -464,11 +592,11 @@ jobs:
   post-deployment-validation:
     name: 🔍 Post-deployment Validation
     runs-on: ${{ vars.RUNS_ON || 'ubuntu-latest' }}
-    needs: [deploy-development, deploy-application]
+    needs: [deploy-platform-infrastructure, deploy-application-infrastructure, deploy-application]
     if: |
       always() && 
       (github.event.inputs.dry_run || github.event.client_payload.dry_run || 'false') != 'true' &&
-      (needs.deploy-development.result == 'success' || needs.deploy-application.result == 'success')
+      (needs.deploy-platform-infrastructure.result == 'success' || needs.deploy-application-infrastructure.result == 'success' || needs.deploy-application.result == 'success')
       
     steps:
       - name: Configure AWS credentials
@@ -530,7 +658,7 @@ jobs:
   deployment-summary:
     name: 📊 Deployment Summary
     runs-on: ubuntu-latest
-    needs: [pre-deployment-validation, production-approval, deploy-development, deploy-application, post-deployment-validation]
+    needs: [pre-deployment-validation, production-approval, deploy-platform-infrastructure, deploy-application-infrastructure, deploy-application, post-deployment-validation]
     if: always()
     
     steps:
@@ -554,7 +682,8 @@ jobs:
           echo "|-------|--------|----------|" >> $GITHUB_STEP_SUMMARY
           echo "| **Pre-validation** | ${{ needs.pre-deployment-validation.result || 'skipped' }} | - |" >> $GITHUB_STEP_SUMMARY
           echo "| **Production Approval** | ${{ needs.production-approval.result || 'skipped' }} | - |" >> $GITHUB_STEP_SUMMARY
-          echo "| **Infrastructure** | ${{ needs.deploy-development.result || 'skipped' }} | - |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Platform Infrastructure** | ${{ needs.deploy-platform-infrastructure.result || 'skipped' }} | - |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Application Infrastructure** | ${{ needs.deploy-application-infrastructure.result || 'skipped' }} | - |" >> $GITHUB_STEP_SUMMARY
           echo "| **Application** | ${{ needs.deploy-application.result || 'skipped' }} | - |" >> $GITHUB_STEP_SUMMARY
           echo "| **Post-validation** | ${{ needs.post-deployment-validation.result || 'skipped' }} | - |" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
