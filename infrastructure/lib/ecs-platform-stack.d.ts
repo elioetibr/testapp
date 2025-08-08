@@ -34,6 +34,7 @@ export declare class EcsPlatformStack extends cdk.Stack {
     private createLogGroup;
     private createEcsCluster;
     private createEcrRepository;
+    private createOrImportHostedZone;
     private createCertificate;
     private createApplicationLoadBalancer;
     private createHttpListener;
