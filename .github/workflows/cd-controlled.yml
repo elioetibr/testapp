@@ -540,6 +540,116 @@ jobs:
             --query 'services[0].{RunningCount:runningCount,PendingCount:pendingCount,DesiredCount:desiredCount,TaskDefinition:taskDefinition}' \
             --output table || echo "Service not found or not accessible"
 
+      - name: Run database migrations
+        if: env.DRY_RUN != 'true'
+        run: |
+          echo "## 🗃️ Database Migration Progress" >> $GITHUB_STEP_SUMMARY
+          
+          # Get ECR repository URI for migration task
+          ECR_URI=$(aws ecr describe-repositories --repository-names testapp --query 'repositories[0].repositoryUri' --output text 2>/dev/null || echo "")
+          
+          if [[ -z "$ECR_URI" ]]; then
+            echo "❌ ECR repository not found" >> $GITHUB_STEP_SUMMARY
+            exit 1
+          fi
+          
+          FULL_IMAGE_URI="${ECR_URI}:${{ env.IMAGE_TAG }}"
+          echo "Running migrations with image: $FULL_IMAGE_URI" >> $GITHUB_STEP_SUMMARY
+          
+          # Get migration task definition ARN from CloudFormation stack outputs
+          MIGRATION_TASK_DEF_ARN=$(aws cloudformation describe-stacks \
+            --stack-name TestApp-App-${{ env.ENVIRONMENT }} \
+            --query 'Stacks[0].Outputs[?OutputKey==`MigrationTaskDefinitionArn`].OutputValue' \
+            --output text 2>/dev/null || echo "")
+          
+          if [[ -z "$MIGRATION_TASK_DEF_ARN" ]]; then
+            echo "❌ Migration task definition not found in stack outputs" >> $GITHUB_STEP_SUMMARY
+            echo "Falling back to creating ad-hoc migration task..." >> $GITHUB_STEP_SUMMARY
+            
+            # Get current application task definition as base
+            CURRENT_TASK_DEF=$(aws ecs describe-services \
+              --cluster testapp-cluster-${{ env.ENVIRONMENT }} \
+              --services testapp-service-${{ env.ENVIRONMENT }} \
+              --query 'services[0].taskDefinition' \
+              --output text 2>/dev/null || echo "")
+            
+            if [[ "$CURRENT_TASK_DEF" != "None" && -n "$CURRENT_TASK_DEF" ]]; then
+              # Create migration task based on application task but with migration command
+              aws ecs describe-task-definition --task-definition $CURRENT_TASK_DEF --query 'taskDefinition' > base-task-def.json
+              
+              # Modify for migration: update image and command
+              jq --arg image "$FULL_IMAGE_URI" \
+                '.family = "testapp-migration-'${{ env.ENVIRONMENT }}'" | 
+                 .containerDefinitions[0].image = $image |
+                 .containerDefinitions[0].command = ["/opt/venv/bin/python", "manage.py", "migrate"] |
+                 del(.taskDefinitionArn, .revision, .status, .requiresAttributes, .placementConstraints, .compatibilities, .registeredAt, .registeredBy)' \
+                base-task-def.json > migration-task-def.json
+              
+              # Register migration task definition
+              MIGRATION_TASK_DEF_ARN=$(aws ecs register-task-definition --cli-input-json file://migration-task-def.json --query 'taskDefinition.taskDefinitionArn' --output text)
+              echo "Created migration task definition: $MIGRATION_TASK_DEF_ARN" >> $GITHUB_STEP_SUMMARY
+            else
+              echo "❌ Cannot find base task definition for migration" >> $GITHUB_STEP_SUMMARY
+              echo "⚠️ Continuing without migrations - ensure database is manually migrated" >> $GITHUB_STEP_SUMMARY
+              exit 0
+            fi
+          fi
+          
+          # Run migration task
+          echo "Running database migration task..." >> $GITHUB_STEP_SUMMARY
+          MIGRATION_TASK_ARN=$(aws ecs run-task \
+            --cluster testapp-cluster-${{ env.ENVIRONMENT }} \
+            --task-definition $MIGRATION_TASK_DEF_ARN \
+            --launch-type FARGATE \
+            --network-configuration "awsvpcConfiguration={subnets=[$(aws ec2 describe-subnets --filters 'Name=tag:Name,Values=*private*' --query 'Subnets[0].SubnetId' --output text)],securityGroups=[$(aws ec2 describe-security-groups --filters 'Name=group-name,Values=*application*' --query 'SecurityGroups[0].GroupId' --output text)],assignPublicIp=DISABLED}" \
+            --query 'tasks[0].taskArn' \
+            --output text)
+          
+          if [[ -n "$MIGRATION_TASK_ARN" ]]; then
+            echo "Migration task started: $MIGRATION_TASK_ARN" >> $GITHUB_STEP_SUMMARY
+            
+            # Wait for migration task to complete
+            echo "Waiting for migration to complete..." >> $GITHUB_STEP_SUMMARY
+            aws ecs wait tasks-stopped --cluster testapp-cluster-${{ env.ENVIRONMENT }} --tasks $MIGRATION_TASK_ARN
+            
+            # Check migration task exit code
+            EXIT_CODE=$(aws ecs describe-tasks \
+              --cluster testapp-cluster-${{ env.ENVIRONMENT }} \
+              --tasks $MIGRATION_TASK_ARN \
+              --query 'tasks[0].containers[0].exitCode' \
+              --output text)
+            
+            if [[ "$EXIT_CODE" == "0" ]]; then
+              echo "✅ Database migration completed successfully" >> $GITHUB_STEP_SUMMARY
+            else
+              echo "❌ Database migration failed with exit code: $EXIT_CODE" >> $GITHUB_STEP_SUMMARY
+              
+              # Get migration logs for troubleshooting
+              LOG_STREAM=$(aws logs describe-log-streams \
+                --log-group-name /aws/ecs/testapp-${{ env.ENVIRONMENT }} \
+                --order-by LastEventTime \
+                --descending \
+                --max-items 1 \
+                --query 'logStreams[0].logStreamName' \
+                --output text 2>/dev/null || echo "")
+              
+              if [[ -n "$LOG_STREAM" ]]; then
+                echo "Latest migration logs:" >> $GITHUB_STEP_SUMMARY
+                aws logs get-log-events \
+                  --log-group-name /aws/ecs/testapp-${{ env.ENVIRONMENT }} \
+                  --log-stream-name $LOG_STREAM \
+                  --limit 10 \
+                  --query 'events[].message' \
+                  --output text >> $GITHUB_STEP_SUMMARY 2>/dev/null || true
+              fi
+              
+              exit 1
+            fi
+          else
+            echo "❌ Failed to start migration task" >> $GITHUB_STEP_SUMMARY
+            exit 1
+          fi
+
       - name: Deploy new application version
         if: env.DRY_RUN != 'true'
         run: |

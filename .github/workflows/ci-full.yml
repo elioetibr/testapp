@@ -407,6 +407,28 @@ jobs:
         run: |
           uv run semgrep --config=auto src/ || true
           
+      - name: Test database migrations
+        env:
+          SECRET_KEY: django-test-secret-key-for-ci
+          ENVIRONMENT: testing
+          DEBUG: false
+          REQUIRED_SETTING: test-value-for-ci
+          EMAIL_URL: smtp://localhost:25
+        run: |
+          mkdir -p logs
+          mkdir -p src/static
+          cd src
+          # Test migrations can be applied cleanly
+          echo "Testing database migration process..."
+          uv run python manage.py migrate --check || {
+            echo "Migration check failed, attempting to apply migrations..."
+            uv run python manage.py migrate
+            echo "✅ Migrations applied successfully"
+          }
+          # Test migrations can be run multiple times safely (idempotent)
+          uv run python manage.py migrate
+          echo "✅ Migration idempotency test passed"
+
       - name: Test application with coverage
         env:
           SECRET_KEY: django-test-secret-key-for-ci
