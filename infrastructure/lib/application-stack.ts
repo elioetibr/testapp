@@ -358,7 +358,7 @@ export class ApplicationStack extends cdk.Stack {
       }),
       environment,
       secrets: {
-        SECRET_KEY: ecs.Secret.fromSecretsManager(this.appSecrets, 'application.secret_key'),
+        SECRET_KEY: ecs.Secret.fromSecretsManager(this.appSecrets, 'secret_key'),
       },
       // Container security settings
       user: props.enableNonRootContainer ? '1001:1001' : undefined,
