@@ -142,6 +142,10 @@ compose-up: ## Start services with docker-compose
 	@echo "$(BLUE)Starting services with docker-compose...$(NC)"
 	docker-compose up -d
 
+compose-up-rebuild: ## Start services with docker-compose
+	@echo "$(BLUE)Starting services with docker-compose...$(NC)"
+	docker-compose up -d --build
+
 compose-down: ## Stop services with docker-compose
 	@echo "$(YELLOW)Stopping docker-compose services...$(NC)"
 	docker-compose down

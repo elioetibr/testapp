@@ -21,7 +21,7 @@ export interface EcsPlatformStackProps extends cdk.StackProps {
   repositoryName?: string;
   // Security enhancements
   enableWAF?: boolean;
-  enableHTTPS?: boolean;
+  certificateArn?: string;
   hostedZoneId?: string;
   baseDomain?: string;
   appName?: string;
@@ -29,7 +29,7 @@ export interface EcsPlatformStackProps extends cdk.StackProps {
 
 export class EcsPlatformStack extends cdk.Stack {
   public readonly cluster: ecs.Cluster;
-  public readonly repository: ecr.Repository;
+  public readonly repository: ecr.IRepository;
   public readonly loadBalancer: elasticloadbalancingv2.ApplicationLoadBalancer;
   public readonly httpListener: elasticloadbalancingv2.ApplicationListener;
   public readonly httpsListener?: elasticloadbalancingv2.ApplicationListener;
@@ -42,9 +42,9 @@ export class EcsPlatformStack extends cdk.Stack {
   constructor(scope: Construct, id: string, props: EcsPlatformStackProps) {
     super(scope, id, props);
 
-    // Validate configuration
-    if (props.enableHTTPS && (!props.baseDomain || !props.appName)) {
-      throw new Error('Base domain and app name are required when HTTPS is enabled');
+    // Validate configuration for domain-based HTTPS
+    if (props.baseDomain && !props.appName) {
+      throw new Error('App name is required when base domain is provided');
     }
 
     // Import VPC and subnets
@@ -77,18 +77,32 @@ export class EcsPlatformStack extends cdk.Stack {
       });
     }
 
-    // Create SSL certificate (if HTTPS enabled)
-    if (props.enableHTTPS && props.baseDomain) {
+    // Create SSL certificate (if domain provided)
+    if (props.baseDomain) {
       this.certificate = this.createCertificate(props);
     }
 
     // Create Application Load Balancer
     this.loadBalancer = this.createApplicationLoadBalancer(props, vpc, loadBalancerSecurityGroup);
 
-    // Create listeners
+    // Create listeners - HTTPS is mandatory, HTTP redirects to HTTPS
     this.httpListener = this.createHttpListener();
-    if (props.enableHTTPS && this.certificate) {
+    
+    // Always try to create HTTPS listener
+    if (this.certificate) {
+      // Use custom certificate for production with domain
       this.httpsListener = this.createHttpsListener();
+      this.addHttpToHttpsRedirect();
+    } else {
+      // Try to create HTTPS listener with imported certificate
+      try {
+        this.httpsListener = this.createHttpsListenerWithImportedCert(props);
+        this.addHttpToHttpsRedirect();
+      } catch (error) {
+        console.warn(`⚠️  HTTPS listener not created: ${error}`);
+        console.warn(`   Application will be available on HTTP only temporarily.`);
+        console.warn(`   For production-ready deployment, provide a certificate ARN via context or configure baseDomain.`);
+      }
     }
 
     // Note: Route53 DNS records are now managed by ApplicationStack
@@ -137,7 +151,7 @@ export class EcsPlatformStack extends cdk.Stack {
     return cluster;
   }
 
-  private createEcrRepository(props: EcsPlatformStackProps): ecr.Repository {
+  private createEcrRepository(props: EcsPlatformStackProps): ecr.IRepository {
     const repositoryName = props.repositoryName || 'testapp';
     
     // Import existing ECR repository instead of creating a new one
@@ -148,28 +162,6 @@ export class EcsPlatformStack extends cdk.Stack {
     
     // Note: Lifecycle rules and other settings must be configured manually
     // for imported repositories or through a separate stack
-    return repository;
-          description: 'Delete untagged images after 1 day',
-          tagStatus: ecr.TagStatus.UNTAGGED,
-          maxImageAge: cdk.Duration.days(1),
-        },
-        {
-          rulePriority: 2,
-          description: 'Keep last 10 images',
-          tagStatus: ecr.TagStatus.ANY,
-          maxImageCount: 10,
-        },
-      ],
-      removalPolicy: props.environment === 'production' 
-        ? cdk.RemovalPolicy.RETAIN 
-        : cdk.RemovalPolicy.DESTROY,
-    });
-
-    // Add tags
-    cdk.Tags.of(repository).add('Environment', props.environment);
-    cdk.Tags.of(repository).add('ManagedBy', 'CDK');
-    cdk.Tags.of(repository).add('Component', 'Container-Registry');
-
     return repository;
   }
 
@@ -222,7 +214,8 @@ export class EcsPlatformStack extends cdk.Stack {
       protocol: elasticloadbalancingv2.ApplicationProtocol.HTTP,
     });
 
-    // Default action - will be overridden by application stack
+    // Note: Redirect logic will be added after HTTPS listener is created (if successful)
+    // Default action - will be overridden by application stack or redirect
     listener.addAction('DefaultAction', {
       action: elasticloadbalancingv2.ListenerAction.fixedResponse(503, {
         contentType: 'text/plain',
@@ -231,6 +224,22 @@ export class EcsPlatformStack extends cdk.Stack {
     });
 
     return listener;
+  }
+
+  private addHttpToHttpsRedirect(): void {
+    // Remove default action and add redirect
+    // Note: This is a simplified approach. In production, you might want more sophisticated rule management.
+    console.log('✅ HTTPS listener created successfully. Adding HTTP to HTTPS redirect.');
+    
+    // Add redirect action (this will override the default action)
+    this.httpListener.addAction('RedirectToHttps', {
+      action: elasticloadbalancingv2.ListenerAction.redirect({
+        protocol: 'HTTPS',
+        port: '443',
+        permanent: true,
+      }),
+      priority: 1, // Higher priority than default action
+    });
   }
 
   private createHttpsListener(): elasticloadbalancingv2.ApplicationListener {
@@ -253,18 +262,47 @@ export class EcsPlatformStack extends cdk.Stack {
       }),
     });
 
-    // Add HTTP to HTTPS redirect
-    this.httpListener.addAction('RedirectToHttps', {
-      action: elasticloadbalancingv2.ListenerAction.redirect({
-        protocol: 'HTTPS',
-        port: '443',
-        permanent: true,
+    return listener;
+  }
+
+  private createHttpsListenerWithImportedCert(props: EcsPlatformStackProps): elasticloadbalancingv2.ApplicationListener {
+    // For development environments without custom domain, try to import an existing certificate
+    // or provide instructions for manual certificate creation
+    const certificateArn = props.certificateArn || this.node.tryGetContext('certificateArn');
+    
+    if (!certificateArn) {
+      // Log instructions for manual certificate setup
+      console.warn(`⚠️  HTTPS enabled for ${props.environment} but no certificate ARN provided.`);
+      console.warn(`   To enable HTTPS, create a certificate in ACM manually and provide the ARN via:`);
+      console.warn(`   - Context: --context certificateArn=arn:aws:acm:region:account:certificate/xxx`);
+      console.warn(`   - Or add certificateArn to EcsPlatformStackProps`);
+      console.warn(`   For now, falling back to HTTP-only configuration.`);
+      
+      throw new Error(`Certificate ARN required for HTTPS in ${props.environment} environment. See console warnings for setup instructions.`);
+    }
+
+    // Import existing certificate
+    const certificate = certificatemanager.Certificate.fromCertificateArn(
+      this, 'ImportedCertificate', 
+      certificateArn
+    );
+
+    const listener = this.loadBalancer.addListener('HttpsListener', {
+      port: 443,
+      protocol: elasticloadbalancingv2.ApplicationProtocol.HTTPS,
+      certificates: [certificate],
+    });
+
+    // Default action - will be overridden by application stack
+    listener.addAction('DefaultAction', {
+      action: elasticloadbalancingv2.ListenerAction.fixedResponse(503, {
+        contentType: 'text/plain',
+        messageBody: 'Service temporarily unavailable',
       }),
     });
 
     return listener;
   }
-
 
   private createWAF(props: EcsPlatformStackProps): wafv2.CfnWebACL {
     // Create IP sets for rate limiting

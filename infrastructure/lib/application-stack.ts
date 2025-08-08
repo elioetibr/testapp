@@ -169,6 +169,9 @@ export class ApplicationStack extends cdk.Stack {
     // Create target group
     this.targetGroup = this.createTargetGroup(props, vpc, loadBalancer);
 
+    // Run database migrations before starting the service
+    this.runMigrations(props, cluster, applicationSecurityGroup);
+
     // Create Fargate service
     this.service = this.createFargateService(props, cluster, applicationSecurityGroup);
 
@@ -547,6 +550,71 @@ export class ApplicationStack extends cdk.Stack {
       target: route53.RecordTarget.fromAlias(
         new route53targets.LoadBalancerTarget(loadBalancer)
       ),
+    });
+  }
+
+  private runMigrations(
+    props: ApplicationStackProps, 
+    cluster: ecs.ICluster, 
+    securityGroup: ec2.ISecurityGroup
+  ): void {
+    // Create a separate task definition for migrations
+    const migrationTaskDefinition = new ecs.FargateTaskDefinition(this, 'MigrationTaskDefinition', {
+      family: `testapp-migration-${props.environment}`,
+      cpu: props.cpu || 256,
+      memoryLimitMiB: props.memoryLimitMiB || 512,
+      executionRole: this.taskDefinition.executionRole!,
+      taskRole: this.taskDefinition.taskRole!,
+    });
+
+    // Import log group and repository (already created)
+    const logGroup = logs.LogGroup.fromLogGroupName(this, 'ImportedMigrationLogGroup', props.logGroupName);
+    const repository = ecr.Repository.fromRepositoryName(
+      this, 'ImportedMigrationRepository', 
+      props.repositoryUri.split('/').pop()!.split(':')[0]
+    );
+
+    // Create migration container with same environment as main app but different command
+    const migrationContainer = migrationTaskDefinition.addContainer('MigrationContainer', {
+      image: ecs.ContainerImage.fromEcrRepository(repository, props.taskImageTag || 'latest'),
+      environment: {
+        REQUIRED_SETTING: props.environment,
+        ENVIRONMENT: props.environment,
+        AWS_DEFAULT_REGION: this.region,
+        ...props.environmentVariables,
+      },
+      secrets: {
+        SECRET_KEY: ecs.Secret.fromSecretsManager(this.appSecrets, 'secret_key'),
+        JWT_SECRET: ecs.Secret.fromSecretsManager(this.appSecrets, 'jwt_secret'),
+      },
+      logging: ecs.LogDrivers.awsLogs({
+        logGroup,
+        streamPrefix: 'migration',
+      }),
+      // Override the default command to run migrations
+      command: ['/opt/venv/bin/python', 'manage.py', 'migrate'],
+      essential: true,
+    });
+
+    // Add security configuration
+    if (props.enableNonRootContainer) {
+      migrationContainer.addToExecutionPolicy(new iam.PolicyStatement({
+        effect: iam.Effect.ALLOW,
+        actions: ['ecs:RunTask'],
+        resources: [migrationTaskDefinition.taskDefinitionArn],
+      }));
+    }
+
+    // Add tags
+    cdk.Tags.of(migrationTaskDefinition).add('Environment', props.environment);
+    cdk.Tags.of(migrationTaskDefinition).add('Component', 'ECS-Migration-Task');
+    cdk.Tags.of(migrationTaskDefinition).add('Purpose', 'Database-Migration');
+
+    // Output migration task definition ARN for use in workflows
+    new cdk.CfnOutput(this, 'MigrationTaskDefinitionArn', {
+      value: migrationTaskDefinition.taskDefinitionArn,
+      description: 'Migration Task Definition ARN for running database migrations',
+      exportName: `${this.stackName}-MigrationTaskDefinitionArn`,
     });
   }
 

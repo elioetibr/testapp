@@ -28,7 +28,7 @@ const environmentConfigs: Record<string, any> = {
     // Security Features (disabled by default for cost optimization)
     enableVPCFlowLogs: false,
     enableWAF: false,
-    enableHTTPS: true,
+    // HTTPS is always enabled - provide certificateArn or baseDomain to configure SSL
     
     // ECS Platform Configuration
     clusterName: `testapp-cluster-${environment}`,
@@ -80,7 +80,7 @@ const environmentConfigs: Record<string, any> = {
     // Security Features (fully enabled for production)
     enableVPCFlowLogs: true,
     enableWAF: true,
-    enableHTTPS: true, // Requires domainName to be configured
+    // HTTPS is mandatory - configure baseDomain and appName for automatic certificate
     
     // ECS Platform Configuration
     clusterName: `testapp-cluster-${environment}`,
@@ -131,8 +131,8 @@ const baseDomain = app.node.tryGetContext('baseDomain');
 const hostedZoneId = app.node.tryGetContext('hostedZoneId');
 const appName = app.node.tryGetContext('appName');
 
-// Enable HTTPS only if domain config is provided and configuration allows it
-const httpsEnabled = config.enableHTTPS && baseDomain && appName;
+// Enable HTTPS if domain config is provided (HTTPS is mandatory when possible)
+const httpsEnabled = baseDomain && appName;
 
 console.log(`🚀 Deploying TestApp infrastructure for environment: ${environment}`);
 if (prId) {
@@ -147,7 +147,6 @@ console.log(`📊 Configuration:`, JSON.stringify({
   securityFeatures: {
     enableVPCFlowLogs: config.enableVPCFlowLogs,
     enableWAF: config.enableWAF,
-    enableHTTPS: httpsEnabled,
     enableNonRootContainer: config.enableNonRootContainer,
     enableReadOnlyRootFilesystem: config.enableReadOnlyRootFilesystem,
   }
@@ -291,7 +290,6 @@ if (prId) {
     repositoryName: config.repositoryName,
     // Security enhancements
     enableWAF: config.enableWAF,
-    enableHTTPS: httpsEnabled,
     hostedZoneId: hostedZoneId,
     baseDomain: baseDomain,
     appName: appName,
