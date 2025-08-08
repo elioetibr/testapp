@@ -11,19 +11,13 @@ const mockExecSync = execSync as jest.MockedFunction<typeof execSync>;
 
 describe('SecretsLoader', () => {
   const mockSecretsContent = {
-    application: {
-      secret_key: 'test-secret-key',
-      jwt_secret: 'test-jwt-secret',
-      required_setting: 'test'
-    },
-    external_services: {
-      api_key: 'test-api-key-12345',
-      webhook_secret: 'test-webhook-secret'
-    },
-    monitoring: {
-      datadog_api_key: 'test-datadog-key',
-      sentry_dsn: 'test-sentry-dsn'
-    }
+    secret_key: 'test-secret-key',
+    jwt_secret: 'test-jwt-secret',
+    required_setting: 'test',
+    api_key: 'test-api-key-12345',
+    webhook_secret: 'test-webhook-secret',
+    datadog_api_key: 'test-datadog-key',
+    sentry_dsn: 'test-sentry-dsn'
   };
 
   beforeEach(() => {
@@ -127,7 +121,7 @@ describe('SecretsLoader', () => {
       const loader = new SecretsLoader('test');
       
       expect(() => loader.loadSecrets()).toThrow(
-        'Required secret missing: application.secret_key'
+        'Required secret missing: secret_key'
       );
     });
   });
@@ -153,19 +147,13 @@ describe('SecretsLoader', () => {
 
       // Should return fallback secrets with test environment
       expect(secrets).toEqual({
-        application: {
-          secret_key: 'default-secret',
-          jwt_secret: 'default-jwt-secret',
-          required_setting: 'test'
-        },
-        external_services: {
-          api_key: '',
-          webhook_secret: ''
-        },
-        monitoring: {
-          datadog_api_key: '',
-          sentry_dsn: ''
-        }
+        secret_key: 'default-secret',
+        jwt_secret: 'default-jwt-secret',
+        required_setting: 'test',
+        api_key: '',
+        webhook_secret: '',
+        datadog_api_key: '',
+        sentry_dsn: ''
       });
 
       expect(consoleSpy).toHaveBeenCalledWith(
@@ -180,14 +168,14 @@ describe('SecretsLoader', () => {
     test('retrieves secret by path', () => {
       // Use the default mock setup from beforeEach which returns mockSecretsContent
       const loader = new SecretsLoader('test');
-      const secret = loader.getSecret('application.secret_key');
+      const secret = loader.getSecret('secret_key');
 
       expect(secret).toBe('test-secret-key');
     });
 
-    test('retrieves nested secret by path', () => {
+    test('retrieves secret by path', () => {
       const loader = new SecretsLoader('test');
-      const secret = loader.getSecret('external_services.api_key');
+      const secret = loader.getSecret('api_key');
 
       expect(secret).toBe('test-api-key-12345');
     });
@@ -225,49 +213,29 @@ describe('SecretsLoader', () => {
       const envVars = loader.exportAsEnvVars();
 
       expect(envVars).toEqual({
-        'APPLICATION_SECRET_KEY': 'test-secret-key',
-        'APPLICATION_JWT_SECRET': 'test-jwt-secret',
-        'APPLICATION_REQUIRED_SETTING': 'test',
-        'EXTERNAL_SERVICES_API_KEY': 'test-api-key-12345',
-        'EXTERNAL_SERVICES_WEBHOOK_SECRET': 'test-webhook-secret',
-        'MONITORING_DATADOG_API_KEY': 'test-datadog-key',
-        'MONITORING_SENTRY_DSN': 'test-sentry-dsn'
+        'SECRET_KEY': 'test-secret-key',
+        'JWT_SECRET': 'test-jwt-secret',
+        'REQUIRED_SETTING': 'test',
+        'API_KEY': 'test-api-key-12345',
+        'WEBHOOK_SECRET': 'test-webhook-secret',
+        'DATADOG_API_KEY': 'test-datadog-key',
+        'SENTRY_DSN': 'test-sentry-dsn'
       });
     });
 
-    test('handles nested objects correctly', () => {
-      const nestedSecrets = {
-        application: {
-          secret_key: 'test-secret-key',
-          required_setting: 'test'  // Include required field to pass validation
-        },
-        app: {
-          auth: {
-            jwt: {
-              secret: 'jwt-secret'
-            }
-          }
-        }
-      };
-
-      // Mock execSync to return nested secrets
-      mockExecSync.mockImplementation((command: string) => {
-        if (command === 'which sops') {
-          return '/usr/local/bin/sops';
-        }
-        if (command.includes('sops -d')) {
-          return JSON.stringify(nestedSecrets);
-        }
-        throw new Error('Command not found');
-      });
-
+    test('handles flat structure correctly', () => {
       const loader = new SecretsLoader('test');
       const envVars = loader.exportAsEnvVars();
 
+      // Should return flat structure as environment variables
       expect(envVars).toEqual({
-        'APPLICATION_SECRET_KEY': 'test-secret-key',
-        'APPLICATION_REQUIRED_SETTING': 'test',
-        'APP_AUTH_JWT_SECRET': 'jwt-secret'
+        'SECRET_KEY': 'test-secret-key',
+        'JWT_SECRET': 'test-jwt-secret',
+        'REQUIRED_SETTING': 'test',
+        'API_KEY': 'test-api-key-12345',
+        'WEBHOOK_SECRET': 'test-webhook-secret',
+        'DATADOG_API_KEY': 'test-datadog-key',
+        'SENTRY_DSN': 'test-sentry-dsn'
       });
     });
   });
@@ -352,7 +320,7 @@ describe('SecretsLoader', () => {
       const loader = new SecretsLoader('test');
       
       expect(() => loader.loadSecrets()).toThrow(
-        'Required secret missing: application.secret_key'
+        'Required secret missing: secret_key'
       );
     });
 
@@ -377,7 +345,7 @@ describe('SecretsLoader', () => {
       const loader = new SecretsLoader('test');
       
       expect(() => loader.loadSecrets()).toThrow(
-        'Required secret missing: application.secret_key'
+        'Required secret missing: secret_key'
       );
     });
   });

@@ -34,44 +34,18 @@ describe('EcsPlatformStack', () => {
       });
     });
 
-    test('creates ECR repository with correct configuration', () => {
-      template.hasResourceProperties('AWS::ECR::Repository', {
-        RepositoryName: 'testapp-test',
-        ImageScanningConfiguration: {
-          ScanOnPush: true,
-        },
-        ImageTagMutability: 'MUTABLE',
-        LifecyclePolicy: {
-          LifecyclePolicyText: JSON.stringify({
-            rules: [
-              {
-                rulePriority: 1,
-                description: 'Delete untagged images after 1 day',
-                selection: {
-                  tagStatus: 'untagged',
-                  countType: 'sinceImagePushed',
-                  countNumber: 1,
-                  countUnit: 'days',
-                },
-                action: {
-                  type: 'expire',
-                },
-              },
-              {
-                rulePriority: 2,
-                description: 'Keep last 10 images',
-                selection: {
-                  tagStatus: 'any',
-                  countType: 'imageCountMoreThan',
-                  countNumber: 10,
-                },
-                action: {
-                  type: 'expire',
-                },
-              },
-            ],
-          }),
-        },
+    test('imports ECR repository with correct configuration', () => {
+      // Since we import an existing repository, no AWS::ECR::Repository resource is created
+      // Instead, we verify that the repository outputs are available
+      template.resourceCountIs('AWS::ECR::Repository', 0);
+      
+      // Verify repository outputs are created for imported repository
+      template.hasOutput('RepositoryUri', {
+        Description: 'ECR Repository URI',
+      });
+      
+      template.hasOutput('RepositoryArn', {
+        Description: 'ECR Repository ARN',
       });
     });
 
@@ -126,9 +100,13 @@ describe('EcsPlatformStack', () => {
       });
     });
 
-    test('creates repository with custom name', () => {
-      template.hasResourceProperties('AWS::ECR::Repository', {
-        RepositoryName: 'custom-repo',
+    test('imports repository with custom name', () => {
+      // Repository is imported, not created, so no AWS::ECR::Repository resource
+      template.resourceCountIs('AWS::ECR::Repository', 0);
+      
+      // Verify repository outputs are available
+      template.hasOutput('RepositoryUri', {
+        Description: 'ECR Repository URI',
       });
     });
 
@@ -166,10 +144,10 @@ describe('EcsPlatformStack', () => {
       });
     });
 
-    test('has retain removal policy for ECR in production', () => {
-      template.hasResource('AWS::ECR::Repository', {
-        DeletionPolicy: 'Retain',
-      });
+    test('imports ECR repository for production (no creation)', () => {
+      // ECR repository is imported, not created, so no AWS::ECR::Repository resource
+      // and no deletion policy is set since we don't manage the repository lifecycle
+      template.resourceCountIs('AWS::ECR::Repository', 0);
     });
   });
 
@@ -493,13 +471,10 @@ describe('EcsPlatformStack', () => {
       });
     });
 
-    test('ECR repository has correct tags', () => {
-      template.hasResourceProperties('AWS::ECR::Repository', {
-        Tags: Match.arrayWith([
-          { Key: 'Environment', Value: 'production' },
-          { Key: 'ManagedBy', Value: 'CDK' },
-        ]),
-      });
+    test('ECR repository is imported (no tags management)', () => {
+      // ECR repository is imported, not created, so no AWS::ECR::Repository resource
+      // Tags are not managed by CDK for imported resources
+      template.resourceCountIs('AWS::ECR::Repository', 0);
     });
 
     test('Load Balancer has correct tags', () => {
@@ -688,7 +663,7 @@ describe('EcsPlatformStack', () => {
   });
 
   describe('Environment-specific Removal Policies', () => {
-    test('production environment has retain policy for ECR', () => {
+    test('production environment imports ECR repository (no deletion policy)', () => {
       app = new cdk.App();
       const stack = new EcsPlatformStack(app, 'TestEcsPlatformStack', {
         ...defaultProps,
@@ -696,12 +671,11 @@ describe('EcsPlatformStack', () => {
       });
       template = Template.fromStack(stack);
 
-      template.hasResource('AWS::ECR::Repository', {
-        DeletionPolicy: 'Retain',
-      });
+      // ECR repository is imported, not created, so no deletion policy is managed
+      template.resourceCountIs('AWS::ECR::Repository', 0);
     });
 
-    test('non-production environment has destroy policy for ECR', () => {
+    test('non-production environment imports ECR repository (no deletion policy)', () => {
       app = new cdk.App();
       const stack = new EcsPlatformStack(app, 'TestEcsPlatformStack', {
         ...defaultProps,
@@ -709,9 +683,8 @@ describe('EcsPlatformStack', () => {
       });
       template = Template.fromStack(stack);
 
-      template.hasResource('AWS::ECR::Repository', {
-        DeletionPolicy: 'Delete',
-      });
+      // ECR repository is imported, not created, so no deletion policy is managed
+      template.resourceCountIs('AWS::ECR::Repository', 0);
     });
 
     test('production ALB has deletion protection enabled', () => {

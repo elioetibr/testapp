@@ -6,7 +6,7 @@ from django.http import HttpResponseForbidden
 class VPCHealthCheckMiddleware:
     """
     Middleware to restrict health check endpoint access to VPC internal IPs only.
-    
+
     This middleware checks if requests to /health/ endpoints are coming from
     private IP ranges typically used in VPC environments. External requests
     to health check endpoints are denied with a 403 Forbidden response.
@@ -33,7 +33,7 @@ class VPCHealthCheckMiddleware:
     def get_client_ip(self, request):
         """
         Extract the real client IP from request headers.
-        
+
         When behind a load balancer, the real IP is typically in
         X-Forwarded-For header. Falls back to REMOTE_ADDR.
         """

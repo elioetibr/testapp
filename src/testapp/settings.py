@@ -327,7 +327,7 @@ if email_url == "console://":
     EMAIL_HOST = ""
     EMAIL_PORT = 587
     EMAIL_HOST_USER = ""
-    EMAIL_HOST_PASSWORD = ""
+    EMAIL_HOST_PASSWORD = ""  # nosec B105
 else:
     email_config = env.email("EMAIL_URL")
     EMAIL_BACKEND = email_config["EMAIL_BACKEND"]
@@ -348,6 +348,10 @@ CELERY_TASK_SERIALIZER = "json"
 CELERY_RESULT_SERIALIZER = "json"
 CELERY_TIMEZONE = TIME_ZONE
 CELERY_BEAT_SCHEDULER = "django_celery_beat.schedulers:DatabaseScheduler"
+
+# Create logs directory if it doesn't exist
+log_dir = BASE_DIR / "logs"
+log_dir.mkdir(exist_ok=True)
 
 # Logging configuration
 LOGGING = {
@@ -374,7 +378,7 @@ LOGGING = {
         },
         "file": {
             "class": "logging.handlers.RotatingFileHandler",
-            "filename": BASE_DIR / "logs" / "django.log",
+            "filename": log_dir / "django.log",
             "maxBytes": 1024 * 1024 * 15,  # 15MB
             "backupCount": 10,
             "formatter": "verbose",

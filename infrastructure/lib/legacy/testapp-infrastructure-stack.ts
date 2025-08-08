@@ -71,8 +71,8 @@ export class TestAppInfrastructureStack extends cdk.Stack {
       this.createVPCFlowLogs(props);
     }
 
-    // Create SSL certificate (if HTTPS enabled)
-    if (props.enableHTTPS && props.domainName) {
+    // Create SSL certificate (HTTPS is mandatory when domain is provided)
+    if (props.domainName) {
       this.certificate = this.createCertificate(props);
     }
 
@@ -377,14 +377,14 @@ export class TestAppInfrastructureStack extends cdk.Stack {
       serviceName: `testapp-service-${props.environment}`,
       desiredCount: props.desiredCount,
       publicLoadBalancer: true,
-      listenerPort: props.enableHTTPS ? 443 : 80,
-      protocol: props.enableHTTPS 
+      listenerPort: this.certificate ? 443 : 80,
+      protocol: this.certificate 
         ? elasticloadbalancingv2.ApplicationProtocol.HTTPS 
         : elasticloadbalancingv2.ApplicationProtocol.HTTP,
       certificate: this.certificate,
       domainZone: undefined, // Custom domain zone would be configured separately
       domainName: undefined, // Domain name requires domainZone configuration
-      redirectHTTP: props.enableHTTPS, // Redirect HTTP to HTTPS when HTTPS is enabled
+      redirectHTTP: this.certificate ? true : false, // Redirect HTTP to HTTPS when certificate is available
       assignPublicIp: true,
     };
 
