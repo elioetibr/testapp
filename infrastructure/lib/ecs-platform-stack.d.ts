@@ -15,14 +15,14 @@ export interface EcsPlatformStackProps extends cdk.StackProps {
     clusterName?: string;
     repositoryName?: string;
     enableWAF?: boolean;
-    enableHTTPS?: boolean;
+    certificateArn?: string;
     hostedZoneId?: string;
     baseDomain?: string;
     appName?: string;
 }
 export declare class EcsPlatformStack extends cdk.Stack {
     readonly cluster: ecs.Cluster;
-    readonly repository: ecr.Repository;
+    readonly repository: ecr.IRepository;
     readonly loadBalancer: elasticloadbalancingv2.ApplicationLoadBalancer;
     readonly httpListener: elasticloadbalancingv2.ApplicationListener;
     readonly httpsListener?: elasticloadbalancingv2.ApplicationListener;
@@ -37,7 +37,9 @@ export declare class EcsPlatformStack extends cdk.Stack {
     private createCertificate;
     private createApplicationLoadBalancer;
     private createHttpListener;
+    private addHttpToHttpsRedirect;
     private createHttpsListener;
+    private createHttpsListenerWithImportedCert;
     private createWAF;
     private associateWAFWithALB;
     private createOutputs;

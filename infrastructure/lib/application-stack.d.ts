@@ -67,5 +67,6 @@ export declare class ApplicationStack extends cdk.Stack {
     private createAutoScaling;
     private addListenerRules;
     private setupRoute53;
+    private runMigrations;
     private createOutputs;
 }

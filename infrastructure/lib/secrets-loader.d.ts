@@ -1,17 +1,11 @@
 export interface SecretsConfig {
-    application: {
-        secret_key: string;
-        jwt_secret: string;
-        required_setting: string;
-    };
-    external_services: {
-        api_key: string;
-        webhook_secret: string;
-    };
-    monitoring: {
-        datadog_api_key: string;
-        sentry_dsn: string;
-    };
+    secret_key: string;
+    jwt_secret: string;
+    required_setting: string;
+    api_key: string;
+    webhook_secret: string;
+    datadog_api_key: string;
+    sentry_dsn: string;
 }
 export declare class SecretsLoader {
     private environment;

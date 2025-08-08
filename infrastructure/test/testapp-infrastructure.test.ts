@@ -552,7 +552,6 @@ describe('TestAppInfrastructureStack', () => {
       desiredCount: 1,
       cpu: 256,
       memoryLimitMiB: 512,
-      enableHTTPS: true,
       domainName: 'example.com',
     });
 
@@ -575,7 +574,6 @@ describe('TestAppInfrastructureStack', () => {
       desiredCount: 1,
       cpu: 256,
       memoryLimitMiB: 512,
-      enableHTTPS: true,
       domainName: 'example.com',
     });
 
@@ -656,7 +654,7 @@ describe('TestAppInfrastructureStack', () => {
     }
   });
 
-  test('throws error when HTTPS enabled but no domain provided', () => {
+  test('handles missing domain configuration gracefully', () => {
     expect(() => {
       new TestAppInfrastructureStack(app, 'HttpsValidationTestStack', {
         environment: 'test',
@@ -667,10 +665,9 @@ describe('TestAppInfrastructureStack', () => {
         desiredCount: 1,
         cpu: 256,
         memoryLimitMiB: 512,
-        enableHTTPS: true,
-        // domainName intentionally omitted to test validation
+          // domainName intentionally omitted - should work without HTTPS
       });
-    }).toThrow('A domain name and zone is required when using the HTTPS protocol');
+    }).not.toThrow();
   });
 
   test('handles SOPS error gracefully and creates empty secret', () => {

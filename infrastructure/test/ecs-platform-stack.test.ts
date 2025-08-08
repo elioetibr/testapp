@@ -178,7 +178,6 @@ describe('EcsPlatformStack', () => {
       app = new cdk.App();
       const stack = new EcsPlatformStack(app, 'TestEcsPlatformStack', {
         ...defaultProps,
-        enableHTTPS: true,
       });
       template = Template.fromStack(stack);
     });
@@ -204,8 +203,17 @@ describe('EcsPlatformStack', () => {
     });
 
     test('creates HTTP to HTTPS redirect', () => {
-      template.hasResourceProperties('AWS::ElasticLoadBalancingV2::Listener', {
-        DefaultActions: Match.arrayWith([
+      template.hasResourceProperties('AWS::ElasticLoadBalancingV2::ListenerRule', {
+        Priority: 1,
+        Conditions: [
+          {
+            Field: 'path-pattern',
+            PathPatternConfig: {
+              Values: ['*'],
+            },
+          },
+        ],
+        Actions: [
           {
             Type: 'redirect',
             RedirectConfig: {
@@ -214,7 +222,7 @@ describe('EcsPlatformStack', () => {
               StatusCode: 'HTTP_301',
             },
           },
-        ]),
+        ],
       });
     });
   });
@@ -365,7 +373,6 @@ describe('EcsPlatformStack', () => {
       app = new cdk.App();
       stack = new EcsPlatformStack(app, 'TestEcsPlatformStack', {
         ...defaultProps,
-        enableHTTPS: true,
         baseDomain: 'example.com',
         appName: 'testapp',
         hostedZoneId: 'Z123456789',
@@ -469,7 +476,6 @@ describe('EcsPlatformStack', () => {
       const stack = new EcsPlatformStack(app, 'TestEcsPlatformStack', {
         ...defaultProps,
         environment: 'production',
-        enableHTTPS: true,
         baseDomain: 'example.com',
         appName: 'testapp',
         hostedZoneId: 'Z123456789',
@@ -526,7 +532,7 @@ describe('EcsPlatformStack', () => {
   });
 
   describe('Error Handling and Edge Cases', () => {
-    test('throws error when HTTPS enabled but no domain provided', () => {
+    test('handles missing domain configuration gracefully', () => {
       expect(() => {
         const app = new cdk.App();
         new EcsPlatformStack(app, 'TestHttpsValidation', {
@@ -539,13 +545,12 @@ describe('EcsPlatformStack', () => {
             account: '123456789012',
             region: 'us-east-1',
           },
-          enableHTTPS: true,
-          // baseDomain and appName intentionally omitted to test validation
+            // baseDomain and appName intentionally omitted - should work without HTTPS
         });
-      }).toThrow('Base domain and app name are required when HTTPS is enabled');
+      }).not.toThrow();
     });
 
-    test('throws error when HTTPS enabled but only baseDomain provided', () => {
+    test('throws error when baseDomain provided but appName missing', () => {
       expect(() => {
         const app = new cdk.App();
         new EcsPlatformStack(app, 'TestHttpsValidation2', {
@@ -558,14 +563,13 @@ describe('EcsPlatformStack', () => {
             account: '123456789012',
             region: 'us-east-1',
           },
-          enableHTTPS: true,
-          baseDomain: 'example.com',
+            baseDomain: 'example.com',
           // appName intentionally omitted to test validation
         });
-      }).toThrow('Base domain and app name are required when HTTPS is enabled');
+      }).toThrow('App name is required when base domain is provided');
     });
 
-    test('throws error when HTTPS enabled but only appName provided', () => {
+    test('handles appName without baseDomain gracefully', () => {
       expect(() => {
         const app = new cdk.App();
         new EcsPlatformStack(app, 'TestHttpsValidation3', {
@@ -578,11 +582,10 @@ describe('EcsPlatformStack', () => {
             account: '123456789012',
             region: 'us-east-1',
           },
-          enableHTTPS: true,
-          appName: 'testapp',
-          // baseDomain intentionally omitted to test validation
+            appName: 'testapp',
+          // baseDomain intentionally omitted - should work without HTTPS
         });
-      }).toThrow('Base domain and app name are required when HTTPS is enabled');
+      }).not.toThrow();
     });
 
     test('handles missing optional parameters gracefully', () => {
@@ -608,7 +611,6 @@ describe('EcsPlatformStack', () => {
       app = new cdk.App();
       const stack = new EcsPlatformStack(app, 'TestEcsPlatformStack', {
         ...defaultProps,
-        enableHTTPS: true,
         baseDomain: 'example.com',
         appName: 'testapp',
         // hostedZoneId not provided - should still work
@@ -632,9 +634,20 @@ describe('EcsPlatformStack', () => {
       template.resourceCountIs('AWS::WAFv2::IPSet', 0);
     });
 
-    test('HTTPS disabled by default', () => {
+    test('HTTPS disabled when no domain configuration', () => {
       app = new cdk.App();
-      const stack = new EcsPlatformStack(app, 'TestEcsPlatformStack', defaultProps);
+      const propsWithoutDomain = {
+        environment: 'test',
+        vpcId: 'vpc-12345678',
+        publicSubnetIds: ['subnet-11111111'],
+        loadBalancerSecurityGroupId: 'sg-12345678',
+        stackName: 'TestEcsPlatformStack',
+        env: {
+          account: '123456789012',
+          region: 'us-east-1',
+        },
+      };
+      const stack = new EcsPlatformStack(app, 'TestEcsPlatformStack', propsWithoutDomain);
       template = Template.fromStack(stack);
 
       template.resourceCountIs('AWS::CertificateManager::Certificate', 0);

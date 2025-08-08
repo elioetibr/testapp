@@ -42,6 +42,7 @@ export class EcsPlatformStack extends cdk.Stack {
   constructor(scope: Construct, id: string, props: EcsPlatformStackProps) {
     super(scope, id, props);
 
+
     // Validate configuration for domain-based HTTPS
     if (props.baseDomain && !props.appName) {
       throw new Error('App name is required when base domain is provided');
@@ -227,18 +228,17 @@ export class EcsPlatformStack extends cdk.Stack {
   }
 
   private addHttpToHttpsRedirect(): void {
-    // Remove default action and add redirect
-    // Note: This is a simplified approach. In production, you might want more sophisticated rule management.
-    console.log('✅ HTTPS listener created successfully. Adding HTTP to HTTPS redirect.');
-    
-    // Add redirect action (this will override the default action)
+    // Add redirect rule for all paths
     this.httpListener.addAction('RedirectToHttps', {
       action: elasticloadbalancingv2.ListenerAction.redirect({
         protocol: 'HTTPS',
         port: '443',
         permanent: true,
       }),
-      priority: 1, // Higher priority than default action
+      conditions: [
+        elasticloadbalancingv2.ListenerCondition.pathPatterns(['*']),
+      ],
+      priority: 1,
     });
   }
 
