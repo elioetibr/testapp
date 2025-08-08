@@ -11,8 +11,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Set environment variables
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    UV_NO_CACHE=1 \
-    UV_SYSTEM_PYTHON=1
+    UV_NO_CACHE=1
 
 # Stage 2: Dependencies installation
 FROM builder AS dependencies
@@ -23,7 +22,9 @@ WORKDIR /app
 # Copy project files needed for installation
 COPY pyproject.toml .
 
-# Install Python dependencies with uv (production group)
+# Create virtual environment and install dependencies
+RUN uv venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
 RUN uv sync --group production --no-dev
 
 # Create directories that will be needed in runtime (since distroless can't create them)
@@ -37,14 +38,14 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     ENVIRONMENT=production \
     DJANGO_SETTINGS_MODULE=testapp.settings \
-    PYTHONPATH=/app
+    PYTHONPATH=/app:/opt/venv/lib/python3.13/site-packages \
+    PATH="/opt/venv/bin:$PATH"
 
 # Set working directory
 WORKDIR /app
 
-# Copy Python packages from dependencies stage
-COPY --from=dependencies /usr/local/lib/python3.13/site-packages /usr/local/lib/python3.13/site-packages
-COPY --from=dependencies /usr/local/bin /usr/local/bin
+# Copy the virtual environment from dependencies stage
+COPY --from=dependencies /opt/venv /opt/venv
 
 # Copy application code
 COPY --chown=nonroot:nonroot src/ .
@@ -62,5 +63,5 @@ EXPOSE 8000
 # - Runs as nonroot user by default
 # - Only contains Python runtime and application
 
-# Use Gunicorn for production (note: distroless python3 already has python3)
-CMD ["python3", "-m", "gunicorn", "--bind", "0.0.0.0:8000", "--workers", "4", "--worker-class", "sync", "--timeout", "30", "--keep-alive", "2", "--max-requests", "1000", "--max-requests-jitter", "100", "--preload", "testapp.wsgi:application"]
+# Use Gunicorn for production with proper Python path
+CMD ["/opt/venv/bin/python", "-m", "gunicorn", "--bind", "0.0.0.0:8000", "--workers", "4", "--worker-class", "sync", "--timeout", "30", "--keep-alive", "2", "--max-requests", "1000", "--max-requests-jitter", "100", "--preload", "testapp.wsgi:application"]
