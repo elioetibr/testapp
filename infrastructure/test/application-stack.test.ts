@@ -230,7 +230,6 @@ describe('ApplicationStack', () => {
         unhealthyThresholdCount: 5,
         environmentVariables: {
           CUSTOM_ENV: 'custom_value',
-          DEBUG: 'false',
         },
       });
       template = Template.fromStack(stack);
@@ -269,7 +268,6 @@ describe('ApplicationStack', () => {
             ],
             Environment: Match.arrayWith([
               { Name: 'CUSTOM_ENV', Value: 'custom_value' },
-              { Name: 'DEBUG', Value: 'false' },
             ]),
             MemoryReservation: 1638, // 80% of 2048
           },
