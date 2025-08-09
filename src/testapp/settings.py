@@ -99,10 +99,17 @@ INSTALLED_APPS = DJANGO_APPS + THIRD_PARTY_APPS + LOCAL_APPS
 
 # Development-only apps
 if DEBUG:
-    INSTALLED_APPS += [
-        "django_extensions",
-        "debug_toolbar",
-    ]
+    try:
+        import django_extensions
+        INSTALLED_APPS.append("django_extensions")
+    except ImportError:
+        pass
+    
+    try:
+        import debug_toolbar
+        INSTALLED_APPS.append("debug_toolbar")
+    except ImportError:
+        pass
 
 SITE_ID = 1
 
@@ -387,22 +394,15 @@ LOGGING = {
         "console": {
             "class": "logging.StreamHandler",
             "formatter": "verbose" if DEBUG else "json",
-        },
-        "file": {
-            "class": "logging.handlers.RotatingFileHandler",
-            "filename": log_dir / "django.log",
-            "maxBytes": 1024 * 1024 * 15,  # 15MB
-            "backupCount": 10,
-            "formatter": "verbose",
-        },
+        }
     },
     "loggers": {
         "django": {
-            "handlers": ["console", "file"] if not IS_TESTING else ["console"],
+            "handlers": ["console"] if not IS_TESTING else ["console"],
             "level": "INFO",
         },
         "testapp": {
-            "handlers": ["console", "file"] if not IS_TESTING else ["console"],
+            "handlers": ["console"] if not IS_TESTING else ["console"],
             "level": "DEBUG" if DEBUG else "INFO",
             "propagate": False,
         },

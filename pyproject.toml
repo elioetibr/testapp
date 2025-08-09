@@ -57,6 +57,9 @@ production = [
 ]
 
 development = [
+    # Enterprise dependencies - updated for Django 5.2 compatibility
+    "django-debug-toolbar>=4.4.6,<5.0.0",
+    "django-extensions>=3.2.3,<4.0.0",
     # SOPS wrapper dependencies
     "PyYAML>=6.0.0,<7.0.0",
 ]
