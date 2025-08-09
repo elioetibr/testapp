@@ -2247,9 +2247,7 @@ dependencies = [
     { name = "celery" },
     { name = "django" },
     { name = "django-cors-headers" },
-    { name = "django-debug-toolbar" },
     { name = "django-environ" },
-    { name = "django-extensions" },
     { name = "django-health-check" },
     { name = "djangorestframework" },
     { name = "drf-spectacular" },
@@ -2303,6 +2301,8 @@ dev = [
     { name = "sphinx-rtd-theme" },
 ]
 development = [
+    { name = "django-debug-toolbar" },
+    { name = "django-extensions" },
     { name = "pyyaml" },
 ]
 docs = [
@@ -2352,9 +2352,7 @@ requires-dist = [
     { name = "celery", specifier = ">=5.3.0,<6.0.0" },
     { name = "django", specifier = ">=5.2.0,<6.0.0" },
     { name = "django-cors-headers", specifier = ">=4.7.0,<5.0.0" },
-    { name = "django-debug-toolbar", specifier = ">=4.4.6" },
     { name = "django-environ", specifier = ">=0.11.0,<1.0.0" },
-    { name = "django-extensions", specifier = ">=3.2.3" },
     { name = "django-health-check", specifier = ">=3.18.0,<4.0.0" },
     { name = "djangorestframework", specifier = ">=3.16.0,<4.0.0" },
     { name = "drf-spectacular", specifier = ">=0.28.0,<1.0.0" },
@@ -2378,7 +2376,9 @@ dev = [
     { name = "bandit", extras = ["toml"], specifier = ">=1.7.5,<2.0.0" },
     { name = "black", specifier = ">=24.0.0,<25.0.0" },
     { name = "django-debug-toolbar", specifier = ">=4.2.0,<5.0.0" },
+    { name = "django-debug-toolbar", specifier = ">=4.4.6,<5.0.0" },
     { name = "django-extensions", specifier = ">=3.2.0,<4.0.0" },
+    { name = "django-extensions", specifier = ">=3.2.3,<4.0.0" },
     { name = "django-stubs", specifier = ">=5.0.0,<6.0.0" },
     { name = "djangorestframework-stubs", specifier = ">=3.15.0,<4.0.0" },
     { name = "factory-boy", specifier = ">=3.3.0,<4.0.0" },
@@ -2407,7 +2407,11 @@ dev = [
     { name = "sphinx-autodoc-typehints", specifier = ">=1.25.0,<2.0.0" },
     { name = "sphinx-rtd-theme", specifier = ">=2.0.0,<3.0.0" },
 ]
-development = [{ name = "pyyaml", specifier = ">=6.0.0,<7.0.0" }]
+development = [
+    { name = "django-debug-toolbar", specifier = ">=4.4.6,<5.0.0" },
+    { name = "django-extensions", specifier = ">=3.2.3,<4.0.0" },
+    { name = "pyyaml", specifier = ">=6.0.0,<7.0.0" },
+]
 docs = [
     { name = "myst-parser", specifier = ">=2.0.0,<3.0.0" },
     { name = "sphinx", specifier = ">=7.1.0,<8.0.0" },

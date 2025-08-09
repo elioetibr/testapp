@@ -2021,3 +2021,4 @@ requirements-snyk.txt  # Ignored It's generate during workflow to snyk scan
 !/infrastructure/lib/
 ### End of Personal Always Add ###
 requirements-snyk.txt
+.env.secrets

@@ -1,0 +1,16 @@
+services:
+  testapp:
+    build:
+      context: .
+      dockerfile: Dockerfile.development
+    ports:
+      - "8000:8000"
+    environment:
+      - REQUIRED_SETTING=development
+      - DEBUG=false
+      - EMAIL_URL=console://
+      - SECRET_KEY=""
+    restart: unless-stopped
+networks:
+  default:
+    name: testapp-network
