@@ -2,12 +2,12 @@ services:
   testapp:
     build:
       context: .
-      dockerfile: Dockerfile.development
+      dockerfile: Dockerfile
     ports:
       - "8000:8000"
     environment:
-      - REQUIRED_SETTING=development
-      - DEBUG=True
+      - REQUIRED_SETTING=production
+      - DEBUG=false
       - EMAIL_URL=console://
     restart: unless-stopped
 networks:

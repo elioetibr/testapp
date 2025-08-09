@@ -350,9 +350,40 @@ export class ApplicationStack extends cdk.Stack {
   ): ecs.ContainerDefinition {
     // Prepare environment variables
     const environment = {
+      // Core Django settings
       REQUIRED_SETTING: props.environment,
       ENVIRONMENT: props.environment,
       AWS_DEFAULT_REGION: this.region,
+      DEBUG: props.environment !== 'production' ? 'true' : 'false',
+      
+      // Database settings
+      DATABASE_URL: 'sqlite:///db.sqlite3', // Default for development, should be RDS in production
+      
+      // Redis settings
+      REDIS_URL: 'redis://localhost:6379/0', // Should be ElastiCache endpoint in production
+      
+      // Security settings
+      ALLOWED_HOSTS: '*', // Should be specific domains in production
+      CORS_ALLOWED_ORIGINS: '', // Should be configured for your frontend domains
+      SECURE_SSL_REDIRECT: props.environment === 'production' ? 'true' : 'false',
+      SECURE_HSTS_SECONDS: '31536000',
+      SECURE_CONTENT_TYPE_NOSNIFF: 'true',
+      SECURE_PROXY_SSL_HEADER: 'HTTP_X_FORWARDED_PROTO,https',
+      SESSION_COOKIE_SECURE: props.environment === 'production' ? 'true' : 'false',
+      CSRF_COOKIE_SECURE: props.environment === 'production' ? 'true' : 'false',
+      
+      // Email settings
+      EMAIL_URL: 'console://', // Use console backend by default, configure SMTP for production
+      DEFAULT_FROM_EMAIL: 'noreply@testapp.com',
+      
+      // Static files
+      USE_WHITENOISE: 'true',
+      STATIC_ROOT: '/app/staticfiles',
+      
+      // Monitoring (optional)
+      SENTRY_DSN: '', // Configure in production
+      
+      // Override with any custom environment variables
       ...props.environmentVariables,
     };
 
@@ -366,6 +397,9 @@ export class ApplicationStack extends cdk.Stack {
       environment,
       secrets: {
         SECRET_KEY: ecs.Secret.fromSecretsManager(this.appSecrets, 'secret_key'),
+        // Add more secrets as needed
+        // DATABASE_URL: ecs.Secret.fromSecretsManager(this.appSecrets, 'database_url'),
+        // REDIS_URL: ecs.Secret.fromSecretsManager(this.appSecrets, 'redis_url'),
       },
       // Container security settings
       user: props.enableNonRootContainer ? '1001:1001' : undefined,
@@ -594,14 +628,47 @@ export class ApplicationStack extends cdk.Stack {
     const migrationContainer = migrationTaskDefinition.addContainer('MigrationContainer', {
       image: ecs.ContainerImage.fromEcrRepository(repository, props.taskImageTag || 'latest'),
       environment: {
+        // Core Django settings
         REQUIRED_SETTING: props.environment,
         ENVIRONMENT: props.environment,
         AWS_DEFAULT_REGION: this.region,
+        DEBUG: props.environment !== 'production' ? 'true' : 'false',
+        
+        // Database settings
+        DATABASE_URL: 'sqlite:///db.sqlite3', // Default for development, should be RDS in production
+        
+        // Redis settings
+        REDIS_URL: 'redis://localhost:6379/0', // Should be ElastiCache endpoint in production
+        
+        // Security settings
+        ALLOWED_HOSTS: '*', // Should be specific domains in production
+        CORS_ALLOWED_ORIGINS: '', // Should be configured for your frontend domains
+        SECURE_SSL_REDIRECT: props.environment === 'production' ? 'true' : 'false',
+        SECURE_HSTS_SECONDS: '31536000',
+        SECURE_CONTENT_TYPE_NOSNIFF: 'true',
+        SECURE_PROXY_SSL_HEADER: 'HTTP_X_FORWARDED_PROTO,https',
+        SESSION_COOKIE_SECURE: props.environment === 'production' ? 'true' : 'false',
+        CSRF_COOKIE_SECURE: props.environment === 'production' ? 'true' : 'false',
+        
+        // Email settings
+        EMAIL_URL: 'console://', // Use console backend by default, configure SMTP for production
+        DEFAULT_FROM_EMAIL: 'noreply@testapp.com',
+        
+        // Static files
+        USE_WHITENOISE: 'true',
+        STATIC_ROOT: '/app/staticfiles',
+        
+        // Monitoring (optional)
+        SENTRY_DSN: '', // Configure in production
+        
+        // Override with any custom environment variables
         ...props.environmentVariables,
       },
       secrets: {
         SECRET_KEY: ecs.Secret.fromSecretsManager(this.appSecrets, 'secret_key'),
         JWT_SECRET: ecs.Secret.fromSecretsManager(this.appSecrets, 'jwt_secret'),
+        // Add more secrets as needed for migrations
+        // DATABASE_URL: ecs.Secret.fromSecretsManager(this.appSecrets, 'database_url'),
       },
       logging: ecs.LogDrivers.awsLogs({
         logGroup,

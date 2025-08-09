@@ -331,14 +331,24 @@ if email_url == "console://":
     EMAIL_USE_TLS = False
     EMAIL_USE_SSL = False
 else:
-    email_config = env.email("EMAIL_URL")
-    EMAIL_BACKEND = email_config["EMAIL_BACKEND"]
-    EMAIL_HOST = email_config.get("EMAIL_HOST", "")
-    EMAIL_PORT = email_config.get("EMAIL_PORT", 587)
-    EMAIL_HOST_USER = email_config.get("EMAIL_HOST_USER", "")
-    EMAIL_HOST_PASSWORD = email_config.get("EMAIL_HOST_PASSWORD", "")
-    EMAIL_USE_TLS = email_config.get("EMAIL_USE_TLS", True)
-    EMAIL_USE_SSL = email_config.get("EMAIL_USE_SSL", False)
+    try:
+        email_config = env.email("EMAIL_URL")
+        EMAIL_BACKEND = email_config["EMAIL_BACKEND"]
+        EMAIL_HOST = email_config.get("EMAIL_HOST", "")
+        EMAIL_PORT = email_config.get("EMAIL_PORT", 587)
+        EMAIL_HOST_USER = email_config.get("EMAIL_HOST_USER", "")
+        EMAIL_HOST_PASSWORD = email_config.get("EMAIL_HOST_PASSWORD", "")
+        EMAIL_USE_TLS = email_config.get("EMAIL_USE_TLS", True)
+        EMAIL_USE_SSL = email_config.get("EMAIL_USE_SSL", False)
+    except Exception:
+        # Fallback to console backend if email URL parsing fails
+        EMAIL_BACKEND = "django.core.mail.backends.console.EmailBackend"
+        EMAIL_HOST = ""
+        EMAIL_PORT = 587
+        EMAIL_HOST_USER = ""
+        EMAIL_HOST_PASSWORD = ""  # nosec B105
+        EMAIL_USE_TLS = False
+        EMAIL_USE_SSL = False
 DEFAULT_FROM_EMAIL = env("DEFAULT_FROM_EMAIL")
 SERVER_EMAIL = DEFAULT_FROM_EMAIL
 
