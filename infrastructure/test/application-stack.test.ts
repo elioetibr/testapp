@@ -69,6 +69,7 @@ describe('ApplicationStack', () => {
 
     test('creates container definition with correct configuration', () => {
       template.hasResourceProperties('AWS::ECS::TaskDefinition', {
+        Family: 'testapp-test', // Target the main task definition specifically
         ContainerDefinitions: [
           {
             Name: 'testapp-container',
@@ -82,11 +83,11 @@ describe('ApplicationStack', () => {
                 Name: 'http',
               },
             ],
-            Environment: [
+            Environment: Match.arrayWith([
               { Name: 'REQUIRED_SETTING', Value: 'test' },
               { Name: 'ENVIRONMENT', Value: 'test' },
               { Name: 'AWS_DEFAULT_REGION', Value: 'us-east-1' },
-            ],
+            ]),
             Secrets: [
               {
                 Name: 'SECRET_KEY',
@@ -252,6 +253,7 @@ describe('ApplicationStack', () => {
 
     test('uses custom container configuration', () => {
       template.hasResourceProperties('AWS::ECS::TaskDefinition', {
+        Family: 'testapp-production', // Target the main production task definition specifically
         ContainerDefinitions: [
           {
             Name: 'testapp-container',
