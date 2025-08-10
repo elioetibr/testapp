@@ -189,7 +189,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: ${{ env.NODE_VERSION }}
+          node-version-file: 'infrastructure/.nvmrc'
           cache: ${{ matrix.cache-strategy.use_npm_cache && 'npm' || '' }}
           cache-dependency-path: infrastructure/package-lock.json
 

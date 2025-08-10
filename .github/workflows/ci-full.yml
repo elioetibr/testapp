@@ -826,7 +826,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '18'
+          node-version-file: 'infrastructure/.nvmrc'
           cache: 'npm'
           cache-dependency-path: infrastructure/package-lock.json
 
@@ -1097,7 +1097,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '18'
+          node-version-file: 'infrastructure/.nvmrc'
           cache: 'npm'
           cache-dependency-path: infrastructure/package-lock.json
 
