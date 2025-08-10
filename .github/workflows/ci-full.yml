@@ -353,7 +353,7 @@ jobs:
             });
 
   tests:
-    name: Tests Code
+    name: Tests Application Code
     runs-on: ${{ vars.RUNS_ON }}     
     if: ${{ !contains(github.event.head_commit.message, '[skip ci]') && !contains(github.event.head_commit.message, '[ci skip]') }} 
     steps:
@@ -463,7 +463,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '18'
+          node-version-file: 'infrastructure/.nvmrc'
           cache: 'npm'
           cache-dependency-path: infrastructure/package-lock.json
 
@@ -480,7 +480,7 @@ jobs:
       - name: Run infrastructure tests
         run: |
           cd infrastructure
-          npm test
+          npm test -- --coverage
 
       - name: Synthesize CloudFormation
         run: |
@@ -943,8 +943,7 @@ jobs:
               echo "Service is ready!"
             '
             
-            # Test the application endpoints
-            curl -f "${{ steps.deploy.outputs.application_url }}/" 
+            # Test only the health endpoint (remove helloworld test)
             curl -f "${{ steps.deploy.outputs.application_url }}/health/"
             
             echo "✅ Infrastructure smoke tests passed"

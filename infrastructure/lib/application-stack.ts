@@ -586,10 +586,13 @@ export class ApplicationStack extends cdk.Stack {
       }
     );
 
+    // Extract subdomain part (remove base domain to avoid duplication)
+    const subdomain = domainName.replace(`.${props.baseDomain}`, '');
+    
     // Create A record for the domain
     new route53.ARecord(this, 'DnsARecord', {
       zone: this.hostedZone,
-      recordName: domainName,
+      recordName: subdomain,
       target: route53.RecordTarget.fromAlias(
         new route53targets.LoadBalancerTarget(loadBalancer)
       ),
@@ -598,7 +601,7 @@ export class ApplicationStack extends cdk.Stack {
     // Create AAAA record for IPv6 (if ALB supports it)
     new route53.AaaaRecord(this, 'DnsAaaaRecord', {
       zone: this.hostedZone,
-      recordName: domainName,
+      recordName: subdomain,
       target: route53.RecordTarget.fromAlias(
         new route53targets.LoadBalancerTarget(loadBalancer)
       ),
