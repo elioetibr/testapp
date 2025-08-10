@@ -1,7 +1,7 @@
 # Makefile for TestApp Container Management
 # Usage: make <target>
 
-.PHONY: help build build-dev build-prod run run-dev run-prod stop clean test logs shell sops-setup sops-encrypt sops-decrypt sops-encrypt-pattern sops-decrypt-pattern sops-to-act sops-test requirements-snyk lint format test-django test-coverage install sync check security audit infra-install infra-build infra-test infra-synth infra-diff infra-deploy infra-deploy-dev infra-deploy-staging infra-deploy-prod infra-deploy-vpc infra-deploy-platform infra-deploy-app infra-deploy-all infra-destroy infra-destroy-dev infra-destroy-staging infra-destroy-prod infra-destroy-all infra-enable-waf infra-enable-flow-logs infra-enable-https infra-enable-container-security infra-disable-security infra-security-status
+.PHONY: help build build-dev build-prod run run-dev run-prod stop clean test logs shell sops-setup sops-encrypt sops-decrypt sops-updatekeys sops-encrypt-with-keys sops-encrypt-pattern sops-decrypt-pattern sops-updatekeys-pattern sops-encrypt-with-keys-pattern sops-to-act sops-test reviewer-setup requirements-snyk lint format test-django test-coverage install sync check security audit infra-install infra-build infra-test infra-synth infra-diff infra-deploy infra-deploy-dev infra-deploy-staging infra-deploy-prod infra-deploy-vpc infra-deploy-platform infra-deploy-app infra-deploy-all infra-destroy infra-destroy-dev infra-destroy-staging infra-destroy-prod infra-destroy-all infra-enable-waf infra-enable-flow-logs infra-enable-https infra-enable-container-security infra-disable-security infra-security-status
 
 # Default target
 .DEFAULT_GOAL := help
@@ -180,6 +180,16 @@ sops-decrypt: ## Decrypt secrets using SOPS wrapper
 	@uv run scripts/python/sops/sops_wrapper.py decrypt
 	@echo "$(GREEN)Decryption completed!$(NC)"
 
+sops-updatekeys: ## Update keys for encrypted secrets using SOPS wrapper
+	@echo "$(BLUE)Updating keys for encrypted secrets...$(NC)"
+	@uv run scripts/python/sops/sops_wrapper.py updatekeys
+	@echo "$(GREEN)Key update completed!$(NC)"
+
+sops-encrypt-with-keys: ## Encrypt secrets and update keys in one step
+	@echo "$(BLUE)Encrypting secrets and updating keys...$(NC)"
+	@uv run scripts/python/sops/sops_wrapper.py encrypt --update-keys
+	@echo "$(GREEN)Encryption with key update completed!$(NC)"
+
 sops-encrypt-pattern: ## Encrypt secrets with custom pattern (use PATTERN=...)
 	@echo "$(BLUE)Encrypting secrets with pattern: $(PATTERN)$(NC)"
 	@uv run scripts/python/sops/sops_wrapper.py encrypt --pattern "$(PATTERN)"
@@ -187,6 +197,14 @@ sops-encrypt-pattern: ## Encrypt secrets with custom pattern (use PATTERN=...)
 sops-decrypt-pattern: ## Decrypt secrets with custom pattern (use PATTERN=...)
 	@echo "$(BLUE)Decrypting secrets with pattern: $(PATTERN)$(NC)"
 	@uv run scripts/python/sops/sops_wrapper.py decrypt --pattern "$(PATTERN)"
+
+sops-updatekeys-pattern: ## Update keys with custom pattern (use PATTERN=...)
+	@echo "$(BLUE)Updating keys with pattern: $(PATTERN)$(NC)"
+	@uv run scripts/python/sops/sops_wrapper.py updatekeys --pattern "$(PATTERN)"
+
+sops-encrypt-with-keys-pattern: ## Encrypt with key update using custom pattern (use PATTERN=...)
+	@echo "$(BLUE)Encrypting with key update using pattern: $(PATTERN)$(NC)"
+	@uv run scripts/python/sops/sops_wrapper.py encrypt --update-keys --pattern "$(PATTERN)"
 
 sops-to-act: ## Convert secrets to .act/.secrets format for GitHub Actions
 	@echo "$(BLUE)Converting secrets to .act/.secrets format...$(NC)"
@@ -197,6 +215,24 @@ sops-test: ## Run SOPS wrapper tests
 	@echo "$(BLUE)Running SOPS wrapper tests...$(NC)"
 	@uv run scripts/python/sops/test_sops_wrapper.py
 	@echo "$(GREEN)SOPS tests completed!$(NC)"
+
+reviewer-setup: ## Complete setup for assessment reviewer (install deps, import GPG key, decrypt secrets)
+	@echo "$(BLUE)Setting up environment for assessment reviewer...$(NC)"
+	@echo "$(YELLOW)1. Installing Python dependencies...$(NC)"
+	@uv sync
+	@echo "$(YELLOW)2. Importing GPG private key...$(NC)"
+	@if [ -f "assessment-reviewer-private-key.asc" ]; then \
+		gpg --import assessment-reviewer-private-key.asc && \
+		echo "$(GREEN)✅ GPG key imported successfully$(NC)"; \
+	else \
+		echo "$(RED)❌ assessment-reviewer-private-key.asc not found$(NC)" && exit 1; \
+	fi
+	@echo "$(YELLOW)3. Verifying GPG key...$(NC)"
+	@gpg --list-keys "elio+sops@elio.eti.br" || (echo "$(RED)❌ GPG key not found$(NC)" && exit 1)
+	@echo "$(YELLOW)4. Decrypting SOPS secrets...$(NC)"
+	@make sops-decrypt
+	@echo "$(GREEN)✅ Assessment reviewer setup complete!$(NC)"
+	@echo "$(BLUE)You can now access decrypted secrets in secrets/*/secrets.dec.yaml$(NC)"
 
 # Dependencies and CI/CD targets
 requirements-snyk: ## Generate requirements-snyk.txt for Snyk dependency scanning

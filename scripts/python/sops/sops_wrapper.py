@@ -5,6 +5,7 @@ SOPS Wrapper - Python utility for encrypting and decrypting secrets with SOPS.
 This wrapper provides functionality to:
 - Detect changes in decrypted files
 - Encrypt only when necessary
+- Update keys during encryption or separately
 - Ensure no empty encrypted files are generated
 - Provide parallel processing for better performance
 """
@@ -157,7 +158,34 @@ class SOPSWrapper:
 
         return None
 
-    def _encrypt_file(self, dec_file: Path, enc_file: Path) -> bool:
+    def _updatekeys_file(self, enc_file: Path) -> bool:
+        """Update keys for an existing encrypted file using SOPS updatekeys."""
+        try:
+            # Run SOPS updatekeys command
+            result = subprocess.run([
+                "sops", "updatekeys", "--yes", str(enc_file)
+            ], capture_output=True, text=True, timeout=60)
+
+            if result.returncode != 0:
+                self.logger.error(f"SOPS updatekeys failed for {enc_file}: {result.stderr}")
+                return False
+
+            # Verify encrypted file is still valid and not empty
+            if not self._is_file_not_empty(enc_file):
+                self.logger.error(f"Updatekeys created empty file: {enc_file}")
+                return False
+
+            self.logger.info(f"✅ Successfully updated keys: {enc_file}")
+            return True
+
+        except subprocess.TimeoutExpired:
+            self.logger.error(f"Updatekeys timeout for {enc_file}")
+            return False
+        except Exception as e:
+            self.logger.error(f"Updatekeys error for {enc_file}: {e}")
+            return False
+
+    def _encrypt_file(self, dec_file: Path, enc_file: Path, update_keys: bool = False) -> bool:
         """Encrypt a single file using SOPS."""
         try:
             # Ensure output directory exists
@@ -184,6 +212,14 @@ class SOPSWrapper:
                 return False
 
             self.logger.info(f"✅ Successfully encrypted: {dec_file} -> {enc_file}")
+
+            # Update keys if requested
+            if update_keys:
+                self.logger.info(f"Updating keys for: {enc_file}")
+                if not self._updatekeys_file(enc_file):
+                    self.logger.warning(f"Key update failed for {enc_file}, but encryption was successful")
+                    return True  # Encryption was successful even if key update failed
+
             return True
 
         except subprocess.TimeoutExpired:
@@ -236,13 +272,14 @@ class SOPSWrapper:
 
         return sorted(base_dir.rglob(pattern))
 
-    def encrypt_files(self, pattern: str = "*.dec.yaml", base_dir: Path | None = None) -> int:
+    def encrypt_files(self, pattern: str = "*.dec.yaml", base_dir: Path | None = None, update_keys: bool = False) -> int:
         """
         Encrypt all files matching the pattern.
 
         Args:
             pattern: File pattern to match (default: *.dec.yaml)
             base_dir: Base directory to search (default: current directory)
+            update_keys: Whether to update keys after encryption (default: False)
 
         Returns:
             Number of files successfully encrypted
@@ -271,7 +308,7 @@ class SOPSWrapper:
 
                 if should_encrypt:
                     self.logger.info(f"Encrypting: {dec_file} -> {enc_file} ({reason})")
-                    future = executor.submit(self._encrypt_file, dec_file, enc_file)
+                    future = executor.submit(self._encrypt_file, dec_file, enc_file, update_keys)
                     futures.append(future)
                 else:
                     self.logger.info(f"Skipping: {dec_file} ({reason})")
@@ -325,6 +362,44 @@ class SOPSWrapper:
 
         self.logger.info(f"Decryption completed. {successful_decryptions}/{len(enc_files)} files decrypted successfully")
         return successful_decryptions
+
+    def updatekeys_files(self, pattern: str = "*.enc.yaml", base_dir: Path | None = None) -> int:
+        """
+        Update keys for all encrypted files matching the pattern.
+
+        Args:
+            pattern: File pattern to match (default: *.enc.yaml)
+            base_dir: Base directory to search (default: current directory)
+
+        Returns:
+            Number of files successfully updated
+        """
+        enc_files = self.find_files(pattern, base_dir)
+
+        if not enc_files:
+            self.logger.info(f"No files found matching pattern: {pattern}")
+            return 0
+
+        self.logger.info(f"Found {len(enc_files)} encrypted files to update keys")
+
+        # Process files in parallel
+        successful_updates = 0
+
+        with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
+            futures = []
+
+            for enc_file in enc_files:
+                self.logger.info(f"Updating keys: {enc_file}")
+                future = executor.submit(self._updatekeys_file, enc_file)
+                futures.append(future)
+
+            # Wait for all updates to complete
+            for future in futures:
+                if future.result():
+                    successful_updates += 1
+
+        self.logger.info(f"Key update completed. {successful_updates}/{len(enc_files)} files updated successfully")
+        return successful_updates
 
     def _yaml_to_env_format(self, yaml_content: str, section: str = "act") -> str:
         """Convert YAML content to .env format for GitHub Actions."""
@@ -456,9 +531,12 @@ def main():
         epilog="""
 Examples:
   %(prog)s encrypt                    # Encrypt all *.dec.yaml files
+  %(prog)s encrypt --update-keys      # Encrypt and update keys
   %(prog)s decrypt                    # Decrypt all *.enc.yaml files
+  %(prog)s updatekeys                 # Update keys for all *.enc.yaml files
   %(prog)s to-act                     # Convert secrets to .act/.secrets format
   %(prog)s encrypt --pattern "secrets/*.dec.yaml"
+  %(prog)s updatekeys --pattern "secrets/*.enc.yaml"
   %(prog)s decrypt --base-dir /path/to/secrets
   %(prog)s to-act --secrets-file secrets/prod/secrets.enc.yaml
   %(prog)s encrypt --max-workers 8   # Use 8 parallel workers
@@ -467,7 +545,7 @@ Examples:
 
     parser.add_argument(
         "action",
-        choices=["encrypt", "decrypt", "to-act"],
+        choices=["encrypt", "decrypt", "updatekeys", "to-act"],
         help="Action to perform"
     )
 
@@ -516,6 +594,12 @@ Examples:
     )
 
     parser.add_argument(
+        "--update-keys",
+        action="store_true",
+        help="Update keys after encryption (only for encrypt action)"
+    )
+
+    parser.add_argument(
         "-v", "--verbose",
         action="store_true",
         help="Enable verbose logging"
@@ -537,13 +621,18 @@ Examples:
     try:
         # Determine default pattern based on action
         if args.pattern is None:
-            args.pattern = "*.dec.yaml" if args.action == "encrypt" else "*.enc.yaml"
+            if args.action == "encrypt":
+                args.pattern = "*.dec.yaml"
+            elif args.action in ["decrypt", "updatekeys"]:
+                args.pattern = "*.enc.yaml"
 
         # Execute action
         if args.action == "encrypt":
-            result = sops.encrypt_files(args.pattern, args.base_dir)
+            result = sops.encrypt_files(args.pattern, args.base_dir, args.update_keys)
         elif args.action == "decrypt":
             result = sops.decrypt_files(args.pattern, args.base_dir)
+        elif args.action == "updatekeys":
+            result = sops.updatekeys_files(args.pattern, args.base_dir)
         else:  # to-act
             result = sops.to_act_format(args.secrets_file, args.output_file, args.environment)
             result = 1 if result else 0  # Convert boolean to count for consistency

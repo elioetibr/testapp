@@ -99,6 +99,9 @@ regexes = [
     '''sample.*key''',    # Sample keys in examples
     '''https://github\.com/.*/releases/.*/download/.*''', # GitHub release download URLs
     '''curl.*https://github\.com/.*/releases/.*''',       # curl commands with GitHub URLs
+    '''E41DE5CC3F04BB4759F2E00794FA699AFBCB48FF''',      # Assessment GPG key fingerprint (false positive)
+    '''TestApp SOPS Assessment Reviewer''',                # Assessment GPG user ID (false positive)
+    '''elio\+sops@elio\.eti\.br''',                       # Assessment GPG email (false positive)
 ]
 
 # Allowlist for specific paths
@@ -113,6 +116,7 @@ paths = [
     '''infrastructure/node_modules/''',     # CDK node modules
     '''testapp/static/''',                 # Django static files
     '''testapp/media/''',                  # Django media files
+    '''assessment-reviewer-.*\.asc$''',    # Assessment GPG keys (false positive for assessment)
 ]
 
 # Specific commit allowlist (for historical commits that might contain test data)

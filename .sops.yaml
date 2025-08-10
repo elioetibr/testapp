@@ -1,8 +1,11 @@
 # SOPS Configuration
 creation_rules:
-  # All environments - use AWS KMS
-  - path_regex: '^secrets/(.*)/secrets.dec\.ya?ml$'
+  # Local environment - use AWS KMS only (no GPG for local development)
+  - path_regex: '^secrets/local/secrets(.*)\.ya?ml$'
     kms: 'arn:aws:kms:us-east-1:892193016253:key/af3d21e1-4bd2-470e-ae23-197f64c578be'
     profile: 'eliodevbr-cdk'
-  - path_regex: '^secrets/(.*)/secrets.dec\.ya?ml$'
+  # All other environments - use both AWS KMS and GPG for dual access
+  - path_regex: '^secrets/(dev|test|ci|production)/secrets(.*)\.ya?ml$'
     kms: 'arn:aws:kms:us-east-1:892193016253:key/af3d21e1-4bd2-470e-ae23-197f64c578be'
+    pgp: 'E41DE5CC3F04BB4759F2E00794FA699AFBCB48FF'
+    profile: 'eliodevbr-cdk'
