@@ -63,8 +63,9 @@ if not SECRET_KEY:
         try:
             secrets_data = yaml.safe_load(Path(secrets_file).read_text())
             SECRET_KEY = secrets_data.get("secret_key", "")
-        except Exception:
-            pass
+        except Exception as e:  # nosec B110
+            # Expected: YAML parsing might fail if file is corrupted
+            logger.debug(f"Failed to read secrets from {secrets_file}: {e}")
 
 # Try AWS Secrets Manager if running in ECS (boto3 available)
 if not SECRET_KEY:
@@ -80,8 +81,9 @@ if not SECRET_KEY:
             response = client.get_secret_value(SecretId=aws_secret_name)
             secrets_data = json.loads(response["SecretString"])
             SECRET_KEY = secrets_data.get("secret_key", "")
-        except Exception:
-            pass
+        except Exception as e:  # nosec B110
+            # Expected: AWS Secrets Manager might not be available in dev/local
+            logger.debug(f"Failed to read AWS secrets from {aws_secret_name}: {e}")
 
 if not SECRET_KEY:
     if env("DEBUG"):

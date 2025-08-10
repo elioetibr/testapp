@@ -2026,3 +2026,4 @@ requirements-snyk.txt
 # Assessment reviewer GPG keys
 assessment-reviewer-*.asc
 *.asc
+bandit-report.json
