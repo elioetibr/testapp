@@ -9,16 +9,14 @@ services:
       - REQUIRED_SETTING=production
       - DEBUG=false
       - EMAIL_URL=console://
-      - SECRET_KEY=""
-    restart: unless-stopped
+      - SECRETS_FILE=/run/secrets/secrets_yaml
+      - ALLOWED_HOSTS=localhost,127.0.0.1,0.0.0.0
     secrets:
-       - "django"
-       - ".env.secrets"
+      - secrets_yaml
+    restart: unless-stopped
 networks:
   default:
     name: testapp-network
 secrets:
-   django:
-     file: "./secrets/production/secrets.dec.yaml"
-   .env.secrets:
-     file: "./.env.secrets"
+  secrets_yaml:
+    file: ./secrets/production/secrets.dec.yaml

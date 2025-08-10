@@ -12,9 +12,11 @@ https://docs.djangoproject.com/en/5.2/ref/settings/
 """
 
 import sys
+from importlib.util import find_spec
 from pathlib import Path
 
 import environ
+import yaml
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -52,12 +54,40 @@ env = environ.Env(
 environ.Env.read_env(ROOT_DIR / ".env")
 
 # SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = env("SECRET_KEY")
+SECRET_KEY = env("SECRET_KEY", default="")
+
+# Try to read secrets from YAML file (SOPS/Docker secrets) or AWS Secrets Manager
+if not SECRET_KEY:
+    secrets_file = env("SECRETS_FILE", default="")
+    if secrets_file and Path(secrets_file).exists():
+        try:
+            secrets_data = yaml.safe_load(Path(secrets_file).read_text())
+            SECRET_KEY = secrets_data.get("secret_key", "")
+        except Exception:
+            pass
+
+# Try AWS Secrets Manager if running in ECS (boto3 available)
+if not SECRET_KEY:
+    aws_secret_name = env("AWS_SECRET_NAME", default="")
+    if aws_secret_name:
+        try:
+            import json
+
+            import boto3
+
+            session = boto3.Session()
+            client = session.client("secretsmanager")
+            response = client.get_secret_value(SecretId=aws_secret_name)
+            secrets_data = json.loads(response["SecretString"])
+            SECRET_KEY = secrets_data.get("secret_key", "")
+        except Exception:
+            pass
+
 if not SECRET_KEY:
     if env("DEBUG"):
         SECRET_KEY = "django-insecure-fallback-key-for-development-only"  # nosec B105
     else:
-        raise ValueError("SECRET_KEY environment variable is required in production")
+        raise ValueError("SECRET_KEY must be provided via environment variable, SECRETS_FILE, or AWS_SECRET_NAME")
 
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = env("DEBUG")
@@ -99,17 +129,11 @@ INSTALLED_APPS = DJANGO_APPS + THIRD_PARTY_APPS + LOCAL_APPS
 
 # Development-only apps
 if DEBUG:
-    try:
-        import django_extensions
+    if find_spec("django_extensions"):
         INSTALLED_APPS.append("django_extensions")
-    except ImportError:
-        pass
-    
-    try:
-        import debug_toolbar
+
+    if find_spec("debug_toolbar"):
         INSTALLED_APPS.append("debug_toolbar")
-    except ImportError:
-        pass
 
 SITE_ID = 1
 
@@ -496,7 +520,8 @@ if IS_TESTING:
 
 # Performance optimizations for production
 if IS_PRODUCTION:
-    # Template caching
+    # Template caching - disable APP_DIRS when using custom loaders
+    TEMPLATES[0]["APP_DIRS"] = False
     TEMPLATES[0]["OPTIONS"]["loaders"] = [
         (
             "django.template.loaders.cached.Loader",

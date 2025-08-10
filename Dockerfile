@@ -37,7 +37,6 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     ENVIRONMENT=production \
     DJANGO_SETTINGS_MODULE=testapp.settings \
-    SECRET_KEY=django-production-secret-key-change-me \
     REQUIRED_SETTING=production
 
 # Install runtime dependencies
@@ -50,7 +49,7 @@ RUN groupadd -r appuser && useradd -r -g appuser appuser
 
 # Create app directory and logs directory
 WORKDIR /app
-RUN mkdir -p /app/logs && mkdir -p /app/staticfiles
+RUN mkdir -p /app/logs && mkdir -p /app/staticfiles && mkdir -p /staticfiles
 
 # Copy Python packages from dependencies stage
 COPY --from=dependencies /usr/local/lib/python3.13/site-packages /usr/local/lib/python3.13/site-packages
