@@ -37,7 +37,8 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     ENVIRONMENT=production \
     DJANGO_SETTINGS_MODULE=testapp.settings \
-    REQUIRED_SETTING=production
+    REQUIRED_SETTING=production\
+    DEBUG=false
 
 # Install runtime dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \

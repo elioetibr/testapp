@@ -11,12 +11,15 @@ For the full list of settings and their values, see
 https://docs.djangoproject.com/en/5.2/ref/settings/
 """
 
+import logging
 import sys
 from importlib.util import find_spec
 from pathlib import Path
 
 import environ
 import yaml
+
+logger = logging.getLogger(__name__)
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -42,7 +45,7 @@ env = environ.Env(
     CSRF_COOKIE_SECURE=(bool, False),
     # Email settings
     EMAIL_URL=(str, "console://"),
-    DEFAULT_FROM_EMAIL=(str, "noreply@testapp.com"),
+    DEFAULT_FROM_EMAIL=(str, "noreply@elio.eti.br"),
     # Monitoring
     SENTRY_DSN=(str, ""),
     # Performance
