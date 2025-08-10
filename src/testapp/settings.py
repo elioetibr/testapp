@@ -119,6 +119,7 @@ DJANGO_APPS = [
 
 THIRD_PARTY_APPS = [
     "rest_framework",
+    "drf_spectacular",
     "corsheaders",
     "health_check",
     "health_check.db",
@@ -319,6 +320,18 @@ REST_FRAMEWORK = {
     ],
     "EXCEPTION_HANDLER": "rest_framework.views.exception_handler",
     "TEST_REQUEST_DEFAULT_FORMAT": "json",
+    "DEFAULT_SCHEMA_CLASS": "drf_spectacular.openapi.AutoSchema",
+}
+
+# drf-spectacular settings for OpenAPI/Swagger
+SPECTACULAR_SETTINGS = {
+    "TITLE": "TestApp API",
+    "DESCRIPTION": "Enterprise Django REST API for DevOps Assessment",
+    "VERSION": "1.0.0",
+    "SERVE_INCLUDE_SCHEMA": False,
+    "SCHEMA_PATH_PREFIX": "/api/v1/",
+    "COMPONENT_SPLIT_REQUEST": True,
+    "SORT_OPERATIONS": False,
 }
 
 # CORS configuration

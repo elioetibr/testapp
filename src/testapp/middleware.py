@@ -25,10 +25,17 @@ class VPCHealthCheckMiddleware:
     def __call__(self, request):
         if request.path.startswith("/health/"):
             # Allow health checks from AWS load balancer (User-Agent check)
-            user_agent = request.META.get('HTTP_USER_AGENT', '')
-            if 'ELB-HealthChecker' in user_agent:
+            user_agent = request.META.get("HTTP_USER_AGENT", "")
+            if "ELB-HealthChecker" in user_agent or "Amazon-Route53-Health-Check-Service" in user_agent:
                 return self.get_response(request)
-                
+
+            # Allow health checks from AWS ALB target group health checks
+            # These come from AWS infrastructure and should be allowed
+            x_forwarded_for = request.META.get("HTTP_X_FORWARDED_FOR", "")
+            if x_forwarded_for:
+                # If request comes through load balancer, allow it
+                return self.get_response(request)
+
             client_ip = self.get_client_ip(request)
             if not self.is_allowed_ip(client_ip):
                 return HttpResponseForbidden("Health check access denied - VPC only")
