@@ -24,6 +24,11 @@ class VPCHealthCheckMiddleware:
 
     def __call__(self, request):
         if request.path.startswith("/health/"):
+            # Allow health checks from AWS load balancer (User-Agent check)
+            user_agent = request.META.get('HTTP_USER_AGENT', '')
+            if 'ELB-HealthChecker' in user_agent:
+                return self.get_response(request)
+                
             client_ip = self.get_client_ip(request)
             if not self.is_allowed_ip(client_ip):
                 return HttpResponseForbidden("Health check access denied - VPC only")

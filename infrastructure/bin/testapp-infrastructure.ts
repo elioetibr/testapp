@@ -127,9 +127,9 @@ if (!config) {
 }
 
 // Domain configuration
-const baseDomain = app.node.tryGetContext('baseDomain');
-const hostedZoneId = app.node.tryGetContext('hostedZoneId'); 
-const appName = app.node.tryGetContext('appName');
+const baseDomain = app.node.tryGetContext('baseDomain') || 'assessment.elio.eti.br';
+const hostedZoneId = app.node.tryGetContext('hostedZoneId') || 'Z055937916QCWZ0O7NEMZ'; 
+const appName = app.node.tryGetContext('appName') || 'testapp';
 
 // HTTPS is always enabled for security - required for all environments
 const httpsEnabled = true;

@@ -567,19 +567,21 @@ export class ApplicationStack extends cdk.Stack {
 
   private setupRoute53(props: ApplicationStackProps): void {
     const domainName = this.getDomainName(props);
-    if (!domainName || !props.hostedZoneId || !props.baseDomain) return;
+    if (!domainName || !props.baseDomain) return;
 
-    // Import existing hosted zone
+    // Import hosted zone from Platform stack exports
     this.hostedZone = route53.HostedZone.fromHostedZoneAttributes(this, 'HostedZone', {
-      hostedZoneId: props.hostedZoneId,
-      zoneName: props.baseDomain,
+      hostedZoneId: cdk.Fn.importValue(`TestApp-Platform-${props.environment}-HostedZoneId`),
+      zoneName: cdk.Fn.importValue(`TestApp-Platform-${props.environment}-HostedZoneName`),
     });
 
     // Import load balancer for DNS target
     const loadBalancer = elasticloadbalancingv2.ApplicationLoadBalancer.fromApplicationLoadBalancerAttributes(
-      this, 'ImportedLoadBalancer',
+      this, 'Route53LoadBalancer',
       {
         loadBalancerArn: props.loadBalancerArn,
+        loadBalancerDnsName: cdk.Fn.importValue(`TestApp-Platform-${props.environment}-LoadBalancerDNS`),
+        loadBalancerCanonicalHostedZoneId: cdk.Fn.importValue(`TestApp-Platform-${props.environment}-LoadBalancerZoneId`),
         securityGroupId: '', // Not needed for DNS record creation
       }
     );

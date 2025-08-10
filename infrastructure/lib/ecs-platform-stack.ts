@@ -168,31 +168,26 @@ export class EcsPlatformStack extends cdk.Stack {
       throw new Error('Base domain is required for hosted zone creation');
     }
 
-    // If hostedZoneId is provided, import the existing hosted zone
-    if (props.hostedZoneId) {
-      console.log(`📍 Importing existing hosted zone: ${props.hostedZoneId} for domain: ${props.baseDomain}`);
-      return route53.HostedZone.fromHostedZoneAttributes(this, 'HostedZone', {
-        hostedZoneId: props.hostedZoneId,
-        zoneName: props.baseDomain,
+    // Try to import existing hosted zone first (lookup at synthesis time)
+    try {
+      console.log(`🔍 Looking up existing hosted zone for domain: ${props.baseDomain}`);
+      return route53.HostedZone.fromLookup(this, 'HostedZone', {
+        domainName: props.baseDomain,
       });
+    } catch (error) {
+      // If lookup fails, create a new hosted zone
+      console.log(`🆕 Creating new hosted zone for domain: ${props.baseDomain}`);
+      const hostedZone = new route53.HostedZone(this, 'HostedZone', {
+        zoneName: props.baseDomain,
+        comment: `Hosted zone for ${props.baseDomain} - managed by CDK`,
+      });
+
+      // Add tags
+      cdk.Tags.of(hostedZone).add('Environment', props.environment);
+      cdk.Tags.of(hostedZone).add('ManagedBy', 'CDK');
+      
+      return hostedZone;
     }
-
-    // Create a new hosted zone
-    // Note: HostedZone.fromLookup() would require the zone to exist at synthesis time
-    // and would fail if it doesn't exist. Since we want to create if it doesn't exist,
-    // we'll always create a new one unless hostedZoneId is explicitly provided.
-    console.log(`🆕 Creating new hosted zone for domain: ${props.baseDomain}`);
-    const hostedZone = new route53.HostedZone(this, 'HostedZone', {
-      zoneName: props.baseDomain,
-      comment: `Hosted zone for ${props.baseDomain} - managed by CDK`,
-    });
-
-    // Add tags
-    cdk.Tags.of(hostedZone).add('Environment', props.environment);
-    cdk.Tags.of(hostedZone).add('ManagedBy', 'CDK');
-    cdk.Tags.of(hostedZone).add('Component', 'DNS-HostedZone');
-
-    return hostedZone;
   }
 
   private createCertificate(props: EcsPlatformStackProps): certificatemanager.ICertificate {
@@ -545,6 +540,21 @@ export class EcsPlatformStack extends cdk.Stack {
         value: this.certificate.certificateArn,
         description: 'SSL Certificate ARN',
         exportName: `${this.stackName}-CertificateArn`,
+      });
+    }
+
+    // Hosted Zone outputs (if enabled)
+    if (this.hostedZone) {
+      new cdk.CfnOutput(this, 'HostedZoneId', {
+        value: this.hostedZone.hostedZoneId,
+        description: 'Route53 Hosted Zone ID',
+        exportName: `${this.stackName}-HostedZoneId`,
+      });
+
+      new cdk.CfnOutput(this, 'HostedZoneName', {
+        value: this.hostedZone.zoneName,
+        description: 'Route53 Hosted Zone Name',
+        exportName: `${this.stackName}-HostedZoneName`,
       });
     }
 
