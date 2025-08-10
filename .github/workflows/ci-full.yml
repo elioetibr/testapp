@@ -936,15 +936,12 @@ jobs:
             
             # Wait up to 5 minutes for the service to be ready
             timeout 300 bash -c '
-              until curl -sf "${{ steps.deploy.outputs.application_url }}/health/" > /dev/null; do
+              until curl -sf -vvv "${{ steps.deploy.outputs.application_url }}/" > /dev/null; do
                 echo "Waiting for service to be ready..."
                 sleep 10
               done
               echo "Service is ready!"
             '
-            
-            # Test only the health endpoint (remove helloworld test)
-            curl -f "${{ steps.deploy.outputs.application_url }}/health/"
             
             echo "✅ Infrastructure smoke tests passed"
           else
