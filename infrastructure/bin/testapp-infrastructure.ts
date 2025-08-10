@@ -128,11 +128,11 @@ if (!config) {
 
 // Domain configuration
 const baseDomain = app.node.tryGetContext('baseDomain');
-const hostedZoneId = app.node.tryGetContext('hostedZoneId');
+const hostedZoneId = app.node.tryGetContext('hostedZoneId'); 
 const appName = app.node.tryGetContext('appName');
 
-// Enable HTTPS if domain config is provided (HTTPS is mandatory when possible)
-const httpsEnabled = baseDomain && appName;
+// HTTPS is always enabled for security - required for all environments
+const httpsEnabled = true;
 
 console.log(`🚀 Deploying TestApp infrastructure for environment: ${environment}`);
 if (prId) {
@@ -232,7 +232,6 @@ if (prId) {
   cdk.Tags.of(applicationStack).add('ManagedBy', 'CDK');
   cdk.Tags.of(applicationStack).add('DeploymentType', 'PR-Ephemeral');
   cdk.Tags.of(applicationStack).add('PRId', prId.toString());
-  cdk.Tags.of(applicationStack).add('DeployedAt', new Date().toISOString());
 
   // Generate PR domain name
   const prDomainName = baseDomain && appName 
@@ -247,7 +246,6 @@ if (prId) {
       serviceName: `testapp-service-${environment}-pr-${prId.toString().replace(/[^a-z0-9-]/gi, '-').toLowerCase()}`,
       domainName: prDomainName,
       applicationUrl: prDomainName ? (httpsEnabled ? `https://${prDomainName}` : `http://${prDomainName}`) : 'Available after deployment',
-      timestamp: new Date().toISOString(),
     }, null, 2),
     description: 'PR Deployment Summary',
   });
@@ -355,7 +353,6 @@ if (prId) {
     Environment: environment,
     Project: 'TestApp',
     ManagedBy: 'CDK',
-    DeployedAt: new Date().toISOString(),
   };
 
   Object.entries(stackTags).forEach(([key, value]) => {
@@ -368,7 +365,6 @@ if (prId) {
   new cdk.CfnOutput(applicationStack, 'DeploymentSummary', {
     value: JSON.stringify({
       environment,
-      timestamp: new Date().toISOString(),
       stacks: {
         vpc: vpcStack.stackName,
         platform: ecsPlatformStack.stackName,

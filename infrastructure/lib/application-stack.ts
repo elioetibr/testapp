@@ -354,7 +354,7 @@ export class ApplicationStack extends cdk.Stack {
       REQUIRED_SETTING: props.environment,
       ENVIRONMENT: props.environment,
       AWS_DEFAULT_REGION: this.region,
-      DEBUG: props.environment !== 'production' ? 'true' : 'false',
+      DEBUG: 'false',
       
       // Database settings
       DATABASE_URL: 'sqlite:///db.sqlite3', // Default for development, should be RDS in production
@@ -632,7 +632,7 @@ export class ApplicationStack extends cdk.Stack {
         REQUIRED_SETTING: props.environment,
         ENVIRONMENT: props.environment,
         AWS_DEFAULT_REGION: this.region,
-        DEBUG: props.environment !== 'production' ? 'true' : 'false',
+        DEBUG: 'false',
         
         // Database settings
         DATABASE_URL: 'sqlite:///db.sqlite3', // Default for development, should be RDS in production
