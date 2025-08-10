@@ -567,7 +567,7 @@ export class ApplicationStack extends cdk.Stack {
 
   private setupRoute53(props: ApplicationStackProps): void {
     const domainName = this.getDomainName(props);
-    if (!domainName || !props.baseDomain) return;
+    if (!domainName || !props.baseDomain || !props.hostedZoneId) return;
 
     // Import hosted zone from Platform stack exports
     this.hostedZone = route53.HostedZone.fromHostedZoneAttributes(this, 'HostedZone', {

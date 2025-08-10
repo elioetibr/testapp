@@ -7,7 +7,6 @@ import * as elasticloadbalancingv2 from 'aws-cdk-lib/aws-elasticloadbalancingv2'
 import * as certificatemanager from 'aws-cdk-lib/aws-certificatemanager';
 import * as wafv2 from 'aws-cdk-lib/aws-wafv2';
 import * as route53 from 'aws-cdk-lib/aws-route53';
-import * as route53targets from 'aws-cdk-lib/aws-route53-targets';
 import { Construct } from 'constructs';
 
 export interface EcsPlatformStackProps extends cdk.StackProps {
@@ -460,7 +459,7 @@ export class EcsPlatformStack extends cdk.Stack {
     });
   }
 
-  private createOutputs(props: EcsPlatformStackProps): void {
+  private createOutputs(_props: EcsPlatformStackProps): void {
     // ECS Cluster outputs
     new cdk.CfnOutput(this, 'ClusterArn', {
       value: this.cluster.clusterArn,
@@ -573,20 +572,6 @@ export class EcsPlatformStack extends cdk.Stack {
       });
     }
 
-    // Hosted Zone outputs (if created or imported)
-    if (this.hostedZone) {
-      new cdk.CfnOutput(this, 'HostedZoneId', {
-        value: this.hostedZone.hostedZoneId,
-        description: 'Route53 Hosted Zone ID',
-        exportName: `${this.stackName}-HostedZoneId`,
-      });
-
-      new cdk.CfnOutput(this, 'HostedZoneName', {
-        value: this.hostedZone.zoneName,
-        description: 'Route53 Hosted Zone Name',
-        exportName: `${this.stackName}-HostedZoneName`,
-      });
-    }
 
     // ALB DNS output already created above - removing duplicate
   }
