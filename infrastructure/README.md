@@ -14,12 +14,29 @@ Enterprise-grade AWS CDK TypeScript infrastructure for Django TestApp deployment
 - **Environment-specific configuration** with toggles for IPv6 and HA NAT Gateways
 - **IPv6 Support**: Dual-stack networking with configurable CIDR blocks
 - **High Availability NAT Gateways**: Production-ready HA NAT Gateway setup
-- **ECS Fargate**: Serverless container management with auto-scaling
+- **ECS Fargate**: Serverless container management with enterprise-grade auto-scaling
 - **Application Load Balancer**: Layer 7 load balancing with health checks and HTTPS
-- **Auto Scaling**: CPU, memory, and request-based scaling policies
+- **Multi-Dimensional Auto Scaling**: CPU, memory, and request-based scaling policies
 - **CloudWatch Integration**: Comprehensive logging and monitoring with structured logs
 - **ECR Repository**: Private container registry with lifecycle policies and vulnerability scanning
 - **SOPS Secrets Integration**: Encrypted secrets management with KMS and fallback
+
+### 🎯 **Enterprise Auto-Scaling Configuration**
+
+**Three-Dimensional Scaling Strategy:**
+- **CPU-Based Scaling**: Target 70% CPU utilization with 120s scale-out, 300s scale-in cooldowns
+- **Memory-Based Scaling**: Target 80% memory utilization with 120s scale-out, 300s scale-in cooldowns  
+- **Request-Based Scaling**: Target 1000 requests per target with ALB integration
+
+**Scaling Capacity:**
+- **Development**: 1-3 tasks (cost optimized)
+- **Production**: 1-10 tasks (performance optimized)
+- **Auto-scaling cooldowns**: Asymmetric (2min out, 5min in) to prevent flapping
+
+**CloudWatch Alarms:**
+- Automatic high/low alarm pairs for each scaling metric
+- Target tracking policies with predictive scaling capabilities
+- Integrated with AWS Application Auto Scaling service
 
 ### 🔒 Security Enhancements
 - **AWS WAF Protection**: DDoS protection, OWASP Top 10 mitigation, rate limiting, geo-blocking

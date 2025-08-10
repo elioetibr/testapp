@@ -124,13 +124,13 @@ Choose between **uv** (recommended) or **pip** installation methods:
 
 #### Continue Setup (Both Methods)
 
-4. **Set required environment variable**
+1. **Set required environment variable**
 
    ```bash
    export REQUIRED_SETTING=test_value
    ```
 
-5. **Start the application**
+2. **Start the application**
 
    ```bash
    cd src
@@ -148,9 +148,9 @@ Choose between **uv** (recommended) or **pip** installation methods:
    python manage.py runserver 0.0.0.0:8000
    ```
 
-6. **Access the application**
-   - Main endpoint: <http://localhost:8000>
-   - Health check: <http://localhost:8000/health/>
+3. **Access the application**
+   - Main endpoint: [http://localhost:8000](http://localhost:8000)
+   - Health check: [http://localhost:8000/health/](http://localhost:8000/health/)
 
 ## Project Structure
 
@@ -241,6 +241,22 @@ python manage.py migrate
 |----------|--------|-------------|----------|
 | `/` | GET | Hello World endpoint | `Hello World` |
 | `/health/` | GET | Health check endpoint | `OK` |
+| `/api/docs/` | GET | Swagger UI documentation | Interactive API docs |
+| `/api/redoc/` | GET | ReDoc API documentation | Alternative API docs |
+| `/api/schema/` | GET | OpenAPI 3.0 schema | JSON schema |
+
+### 📚 **API Documentation**
+
+The application now includes **comprehensive API documentation** powered by drf-spectacular:
+
+- **🔗 Swagger UI**: Interactive API testing interface at `/api/docs/`
+- **📖 ReDoc**: Clean, responsive API documentation at `/api/redoc/`  
+- **📋 OpenAPI Schema**: Machine-readable API specification at `/api/schema/`
+
+**Live Documentation URLs:**
+
+- **Development**: [https://dev-testapp.assessment.elio.eti.br/api/docs/](https://dev-testapp.assessment.elio.eti.br/api/docs/)
+- **Production**: [https://testapp.assessment.elio.eti.br/api/docs/](https://testapp.assessment.elio.eti.br/api/docs/)
 
 ## Environment Variables
 
@@ -303,6 +319,7 @@ This project demonstrates **enterprise-grade security practices** with comprehen
 - **✅ Security Policy Validation**: Automated security posture verification
 
 ### 📊 **Security Metrics**
+
 - **🛡️ 6 Parallel Security Scans** in every pipeline run
 - **📈 Zero High/Critical Vulnerabilities** in production deployments
 - **🔍 100% Secret Coverage** with automated detection
@@ -310,6 +327,7 @@ This project demonstrates **enterprise-grade security practices** with comprehen
 - **🚀 Security-First Deployment** with manual production gates
 
 ### 🎯 **Security Benefits**
+
 - **Defense in Depth**: Multi-layered security across application, infrastructure, and pipeline
 - **Shift-Left Security**: Early vulnerability detection in development cycle
 - **Compliance Ready**: SARIF reporting, audit trails, and policy enforcement
@@ -382,11 +400,13 @@ The project includes enterprise-grade AWS infrastructure using CDK with TypeScri
 - **Container Security** - Non-root users and read-only filesystems
 
 **Supported Environments:**
+
 - **Development**: `https://dev-testapp.assessment.elio.eti.br`
 - **Production**: `https://testapp.assessment.elio.eti.br`
 - **PR Deployments**: `https://pr-{id}-testapp.assessment.elio.eti.br` (ephemeral)
 
 **Infrastructure Commands:**
+
 ```bash
 # Install and build infrastructure
 make infra-install
@@ -512,6 +532,7 @@ make compose-down
 ```
 
 **Docker Security Features:**
+
 - **Distroless base images** for minimal attack surface
 - **Multi-stage builds** for reduced image size
 - **Non-root user execution** in containers
@@ -540,7 +561,7 @@ make compose-down
 
 ### Getting Help
 
-- Check Django documentation: <https://docs.djangoproject.com/>
+- Check Django documentation: [https://docs.djangoproject.com/](https://docs.djangoproject.com/)
 - Review application logs for error details
 - Ensure all dependencies are properly installed
 - Verify Python version compatibility

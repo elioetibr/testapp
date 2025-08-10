@@ -7,6 +7,7 @@ This guide covers the deployment of Phase 2: AWS Infrastructure (CDK TypeScript)
 ## Features Implemented
 
 ### ✅ Core Infrastructure
+
 - **VPC with Multi-AZ Support**: Configurable 2-3 Availability Zones
 - **IPv6 Toggle**: Enable/disable IPv6 support per environment
 - **HA NAT Gateways Toggle**: Production-ready high availability setup
@@ -23,6 +24,7 @@ This guide covers the deployment of Phase 2: AWS Infrastructure (CDK TypeScript)
 | production  | ✅   | ✅     | 3   | 3     | 1024 | 2GB    | Production |
 
 ### ✅ Security & Monitoring
+
 - **Least Privilege IAM**: Minimal required permissions
 - **Private Subnets**: Applications isolated from internet
 - **Security Groups**: Restricted network access
@@ -33,6 +35,7 @@ This guide covers the deployment of Phase 2: AWS Infrastructure (CDK TypeScript)
 ## Deployment Commands
 
 ### Prerequisites
+
 ```bash
 # Install dependencies
 npm install
@@ -50,6 +53,7 @@ npx ts-node validate.ts
 ### Environment Deployment
 
 #### Development Environment
+
 ```bash
 # Deploy with minimal resources
 ./scripts/deploy.sh dev
@@ -59,6 +63,7 @@ npx cdk deploy -c environment=dev
 ```
 
 #### Staging Environment (with IPv6)
+
 ```bash
 # Deploy with IPv6 support
 ./scripts/deploy.sh staging
@@ -68,6 +73,7 @@ npx cdk deploy -c environment=staging
 ```
 
 #### Production Environment (with IPv6 + HA NAT)
+
 ```bash
 # Deploy with full production features
 ./scripts/deploy.sh production
@@ -77,6 +83,7 @@ npx cdk deploy -c environment=production
 ```
 
 ### Utility Commands
+
 ```bash
 # View differences before deployment
 npx cdk diff -c environment=production
@@ -91,7 +98,8 @@ npx cdk synth -c environment=production
 ## Architecture Highlights
 
 ### Network Architecture
-```
+
+```text
 ┌─────────────────────────────────────────────────────┐
 │                   Internet                          │
 │                (IPv4 + IPv6*)                      │
@@ -127,11 +135,13 @@ npx cdk synth -c environment=production
 ### Toggle Configuration
 
 #### IPv6 Toggle
+
 - **Enabled**: Adds IPv6 CIDR blocks, routing, and security group rules
 - **Disabled**: IPv4-only configuration for cost optimization
 - **Default**: Disabled for dev, enabled for staging/production
 
 #### HA NAT Gateways Toggle
+
 - **Enabled**: One NAT Gateway per Availability Zone for high availability
 - **Disabled**: Single NAT Gateway for cost optimization
 - **Default**: Disabled for dev/staging, enabled for production
@@ -143,11 +153,45 @@ npx cdk synth -c environment=production
 - **Container Insights**: Enabled for detailed ECS metrics
 - **Retention**: 1 week (dev), 1 month (production)
 
-### Auto Scaling Policies
-- **CPU Scaling**: Target 70% utilization
-- **Memory Scaling**: Target 80% utilization
-- **Scale Out**: 2-minute cooldown
-- **Scale In**: 5-minute cooldown
+### 🎯 **Enterprise Auto-Scaling Configuration**
+
+**Three-Dimensional Scaling Strategy:**
+
+#### 1. CPU-Based Scaling
+- **Target**: 70% CPU utilization
+- **Scale Out Cooldown**: 120 seconds (2 minutes)
+- **Scale In Cooldown**: 300 seconds (5 minutes)
+- **CloudWatch Alarms**: Automatic high/low threshold monitoring
+
+#### 2. Memory-Based Scaling  
+- **Target**: 80% memory utilization
+- **Scale Out Cooldown**: 120 seconds (2 minutes)
+- **Scale In Cooldown**: 300 seconds (5 minutes)
+- **CloudWatch Alarms**: Automatic high/low threshold monitoring
+
+#### 3. Request-Based Scaling
+- **Target**: 1000 requests per target
+- **Metric Source**: ALB target group metrics
+- **Scale Out Cooldown**: 120 seconds (2 minutes)
+- **Scale In Cooldown**: 300 seconds (5 minutes)
+- **CloudWatch Alarms**: Automatic high/low threshold monitoring
+
+**Scaling Capacity Configuration:**
+- **Development**: Min 1, Max 3 tasks (cost optimized)
+- **Production**: Min 1, Max 10 tasks (performance optimized)
+- **Asymmetric Cooldowns**: Faster scale-out (2min) vs scale-in (5min) prevents flapping
+
+**Monitoring Commands:**
+```bash
+# Check auto-scaling status
+aws application-autoscaling describe-scalable-targets --service-namespace ecs --resource-ids service/testapp-cluster-dev/testapp-service-dev
+
+# View scaling policies
+aws application-autoscaling describe-scaling-policies --service-namespace ecs --resource-id service/testapp-cluster-dev/testapp-service-dev
+
+# Monitor scaling activities
+aws application-autoscaling describe-scaling-activities --service-namespace ecs --resource-id service/testapp-cluster-dev/testapp-service-dev
+```
 
 ### Health Checks
 - **ALB Health Check**: `/health/` endpoint
@@ -213,18 +257,21 @@ curl http://<alb-dns-name>/health/
 ## Security Considerations
 
 ### Network Security
+
 - Applications run in private subnets
 - No direct internet access to containers
 - Security groups with minimal required ports
 - WAF integration ready (future enhancement)
 
 ### Container Security
+
 - Non-root container execution
 - Minimal base image (Python 3.9-slim)
 - Image vulnerability scanning enabled
 - Secrets management via AWS Secrets Manager
 
 ### Access Control
+
 - Least privilege IAM roles
 - Service-linked roles for ECS
 - Cross-account access for CI/CD ready
@@ -240,6 +287,7 @@ curl http://<alb-dns-name>/health/
 ## Support
 
 For issues or questions:
+
 1. Check CloudWatch logs for application errors
 2. Review CDK deployment logs
 3. Validate configuration with `npx ts-node validate.ts`

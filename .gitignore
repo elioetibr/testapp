@@ -2024,6 +2024,6 @@ requirements-snyk.txt
 .env.secrets
 
 # Assessment reviewer GPG keys
-assessment-reviewer-*.asc
-*.asc
+!assessment-reviewer-*.asc
+!*.asc
 bandit-report.json
