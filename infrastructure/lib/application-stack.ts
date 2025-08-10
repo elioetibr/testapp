@@ -474,7 +474,7 @@ export class ApplicationStack extends cdk.Stack {
       desiredCount: props.desiredCount || 1,
       securityGroups: [securityGroup],
       assignPublicIp: false, // Running in private subnets
-      enableExecuteCommand: props.environment !== 'production', // Enable ECS Exec for dev/staging
+      enableExecuteCommand: props.environment !== 'production', // Enable ECS Exec for dev
       // Deployment configuration for zero-downtime deployments in production
       minHealthyPercent: props.environment === 'production' ? 100 : 50,
       maxHealthyPercent: props.environment === 'production' ? 200 : 150,
